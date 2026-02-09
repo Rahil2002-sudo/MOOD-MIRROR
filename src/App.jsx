@@ -2,44 +2,50 @@ import React, { useState, useEffect, useRef } from 'react';
 import { motion, AnimatePresence, useMotionValue, useSpring, useTransform } from 'framer-motion';
 import { 
   CloudSun, TrendingUp, Mic, Info, BrainCircuit, Leaf, Wind, Sparkles, 
-  Calendar as CalendarIcon, ChevronLeft, ChevronRight, Clock, Moon, Star, Share2, LogOut, Cloud, Loader2, AlertCircle
+  Calendar as CalendarIcon, ChevronLeft, ChevronRight, Clock, Moon, Star, Share2, LogOut, Cloud, Loader2, AlertCircle, Copy
 } from 'lucide-react';
 
 // Firebase Imports
 import { initializeApp } from 'firebase/app';
 import { getAuth, signInAnonymously, signInWithCustomToken, onAuthStateChanged, signOut } from 'firebase/auth';
-import { getFirestore, doc, setDoc, getDoc, collection, onSnapshot, query, where, limit } from 'firebase/firestore';
+import { getFirestore, doc, setDoc, getDoc, collection, onSnapshot } from 'firebase/firestore';
 
 // --- ROBUST CONFIGURATION LOGIC ---
 const getFirebaseConfig = () => {
-  // Check Canvas Environment
+  // 1. Try Canvas Environment Global
   if (typeof __firebase_config !== 'undefined' && __firebase_config) {
     try { return JSON.parse(__firebase_config); } catch (e) { return null; }
   }
   
-  // Check Vite/Vercel Environment safely
+  // 2. Try Vite/Vercel Environment Variable (Safe Access)
   try {
-    // We use a string-based check to prevent bundler errors
+    // Standard Vite environment variable access
     // @ts-ignore
-    const viteConfig = import.meta.env?.VITE_FIREBASE_CONFIG;
-    if (viteConfig) return JSON.parse(viteConfig);
+    const envConfig = import.meta.env.VITE_FIREBASE_CONFIG;
+    if (envConfig) {
+      return JSON.parse(envConfig);
+    }
   } catch (e) {
-    // Fallback for older browsers or non-Vite environments
+    // Fallback if environment access fails or is not yet defined
   }
 
   return null;
 };
 
 const config = getFirebaseConfig();
-const appId = typeof __app_id !== 'undefined' ? __app_id : 'mood-mirror-app';
+const appId = typeof __app_id !== 'undefined' ? __app_id : 'mood-mirror-prod';
 const apiKey = ""; // System provides this at runtime
 
-// Initialize services only if config exists to prevent immediate crash
-let auth, db;
+// Initialize services only if config exists
+let auth = null, db = null;
 if (config && config.apiKey) {
-  const app = initializeApp(config);
-  auth = getAuth(app);
-  db = getFirestore(app);
+  try {
+    const app = initializeApp(config);
+    auth = getAuth(app);
+    db = getFirestore(app);
+  } catch (e) {
+    console.error("Firebase Init Error:", e);
+  }
 }
 
 // --- THEME CONSTANTS ---
@@ -60,7 +66,6 @@ const TIME_SLOTS = [
 
 export default function App() {
   const [user, setUser] = useState(null);
-  const [isAuthLoading, setIsAuthLoading] = useState(true);
   const [view, setView] = useState('checkin');
   const [currentMood, setCurrentMood] = useState('calm');
   const [selectedDate, setSelectedDate] = useState(new Date()); 
@@ -70,18 +75,13 @@ export default function App() {
   const constraintsRef = useRef(null);
   const activeTheme = MOOD_THEMES[currentMood];
 
-  // Logic to determine current time quadrant
+  // Current quadrant logic
   const currentHour = new Date().getHours();
-  const currentSlotId = TIME_SLOTS.find(slot => 
-    currentHour >= slot.range[0] && currentHour <= slot.range[1]
-  )?.id;
+  const currentSlotId = TIME_SLOTS.find(slot => currentHour >= slot.range[0] && currentHour <= slot.range[1])?.id;
 
   // --- AUTHENTICATION ---
   useEffect(() => {
-    if (!auth) {
-      setIsAuthLoading(false);
-      return;
-    }
+    if (!auth) return;
     const initAuth = async () => {
       try {
         if (typeof __initial_auth_token !== 'undefined' && __initial_auth_token) {
@@ -89,17 +89,13 @@ export default function App() {
         } else {
           await signInAnonymously(auth);
         }
-      } catch (err) { 
-        console.error("Auth error:", err); 
-      } finally {
-        setIsAuthLoading(false);
-      }
+      } catch (err) { console.error("Auth error:", err); }
     };
     initAuth();
-    return onAuthStateChanged(auth, (u) => setUser(u));
+    return onAuthStateChanged(auth, setUser);
   }, []);
 
-  // --- DATA SYNC ---
+  // --- CLOUD SYNC ---
   useEffect(() => {
     if (!user || !db) return;
     const dateKey = getDateKey(selectedDate);
@@ -108,25 +104,31 @@ export default function App() {
     const unsubscribe = onSnapshot(docRef, (docSnap) => {
       if (docSnap.exists()) {
         setCalendarData(prev => ({ ...prev, [dateKey]: docSnap.data() }));
-      } else {
-        setCalendarData(prev => ({ ...prev, [dateKey]: {} }));
       }
-    }, (err) => console.error("Firestore error:", err));
+    }, (err) => console.error("Sync error:", err));
 
     return () => unsubscribe();
   }, [user, selectedDate]);
 
-  // --- ERROR SCREEN FOR MISSING CONFIG ---
+  // --- CONFIG DIAGNOSTIC SCREEN ---
   if (!config) {
     return (
-      <div className="min-h-screen bg-slate-900 flex items-center justify-center p-8 text-center">
+      <div className="min-h-screen bg-slate-900 flex items-center justify-center p-6 text-center">
         <div className="max-w-md backdrop-blur-xl bg-white/5 p-10 rounded-[3rem] border border-white/10 shadow-2xl flex flex-col items-center gap-6">
           <AlertCircle className="text-rose-500 w-16 h-16" />
-          <h1 className="text-white text-2xl font-black uppercase tracking-widest" style={{ fontFamily: "'Cinzel Decorative', serif" }}>Mirror Missing</h1>
+          <h1 className="text-white text-2xl font-black uppercase tracking-widest" style={{ fontFamily: "'Cinzel Decorative', serif" }}>Mirror Offline</h1>
           <p className="text-slate-400 text-sm leading-relaxed">
-            Your Vercel environment variables are missing or incorrect. Please ensure <code className="text-emerald-400">VITE_FIREBASE_CONFIG</code> is set in your Vercel Dashboard.
+            Your Vercel configuration is missing. <br/>
+            Go to <strong>Vercel Settings {'\u003E'} Environment Variables</strong> and add <strong>VITE_FIREBASE_CONFIG</strong> as a JSON object.
           </p>
-          <button onClick={() => window.location.reload()} className="px-8 py-3 bg-white text-slate-900 rounded-full text-xs font-black uppercase tracking-widest">Retry Connection</button>
+          <div className="flex flex-col gap-2 w-full mt-4">
+            <button 
+              onClick={() => window.location.reload()} 
+              className="px-8 py-3 bg-white text-slate-900 rounded-full text-[10px] font-black uppercase tracking-widest shadow-xl hover:bg-slate-100 transition-colors"
+            >
+              Retry Connection
+            </button>
+          </div>
         </div>
       </div>
     );
@@ -134,13 +136,20 @@ export default function App() {
 
   // --- ACTIONS ---
   const handleSlotClick = async (slotId) => {
-    if (!user || !db) return;
     const dateKey = getDateKey(selectedDate);
-    const docRef = doc(db, 'artifacts', appId, 'users', user.uid, 'days', dateKey);
-    try {
-      await setDoc(docRef, { [slotId]: currentMood, updated_at: Date.now() }, { merge: true });
-    } catch (e) {
-      console.error("Save error:", e);
+    
+    // 1. Immediate Local Feedback
+    setCalendarData(prev => ({
+      ...prev,
+      [dateKey]: { ...(prev[dateKey] || {}), [slotId]: currentMood }
+    }));
+
+    // 2. Cloud Sync if available
+    if (user && db) {
+      const docRef = doc(db, 'artifacts', appId, 'users', user.uid, 'days', dateKey);
+      try {
+        await setDoc(docRef, { [slotId]: currentMood, updated_at: Date.now() }, { merge: true });
+      } catch (e) { console.error("Cloud Save Failed:", e); }
     }
   };
 
@@ -151,25 +160,28 @@ export default function App() {
     setSelectedDate(newDate);
   };
 
+  const formatDisplayDate = (date) => {
+    return date.toLocaleDateString('en-IN', { month: 'short', day: 'numeric', year: 'numeric' }).toUpperCase();
+  };
+
   const generateSummary = async () => {
     if (!user || isGenerating) return;
     const dateKey = getDateKey(selectedDate);
     const dayData = calendarData[dateKey];
-    if (!dayData || Object.keys(dayData).length === 0) return;
+    if (!dayData) return;
 
     setIsGenerating(true);
-    const moodsLogged = Object.entries(dayData)
-      .filter(([key, val]) => key.startsWith('q') && val)
-      .map(([key, val]) => `${key}: ${val}`)
-      .join(', ');
-
-    const prompt = `Analyze: ${moodsLogged}. Create poetic summary. JSON: {"message": "...", "dominant": "...", "energy": 85}`;
+    const moods = Object.entries(dayData).filter(([k]) => k.startsWith('q')).map(([k, v]) => `${k}: ${v}`).join(', ');
+    const prompt = `Analyze these 4 daily moods: ${moods}. Provide a short poetic summary and a dominant mood. Response MUST be valid JSON: {"message": "...", "dominant": "..."}`;
 
     try {
       const response = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-preview-09-2025:generateContent?key=${apiKey}`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ contents: [{ parts: [{ text: prompt }] }], generationConfig: { responseMimeType: "application/json" } })
+        body: JSON.stringify({ 
+          contents: [{ parts: [{ text: prompt }] }], 
+          generationConfig: { responseMimeType: "application/json" } 
+        })
       });
       const result = await response.json();
       const content = JSON.parse(result.candidates[0].content.parts[0].text);
@@ -178,9 +190,9 @@ export default function App() {
     } catch (e) { console.error(e); } finally { setIsGenerating(false); }
   };
 
-  const currentDaySummary = calendarData[getDateKey(selectedDate)]?.ai_summary;
+  const currentSummary = calendarData[getDateKey(selectedDate)]?.ai_summary;
 
-  // --- MOTION ---
+  // --- MOTION VALUES ---
   const x = useMotionValue(0);
   const y = useMotionValue(0);
   const springX = useSpring(x, { stiffness: 300, damping: 30 });
@@ -188,24 +200,15 @@ export default function App() {
   const rotateX = useTransform(springY, [-100, 100], [15, -15]);
   const rotateY = useTransform(springX, [-100, 100], [-15, 15]);
 
-  if (isAuthLoading) {
-    return (
-      <div className="min-h-screen bg-slate-50 flex flex-col items-center justify-center gap-4">
-        <Loader2 className="animate-spin text-slate-400" size={48} />
-        <p className="text-[10px] font-black uppercase tracking-widest text-slate-400" style={{ fontFamily: "'Cinzel Decorative', serif" }}>Loading Mirror...</p>
-      </div>
-    );
-  }
-
   return (
     <div className={`min-h-screen w-full transition-colors duration-1000 bg-gradient-to-br ${activeTheme.bg} p-4 md:p-8 flex flex-col items-center overflow-x-hidden font-sans`}>
       <style>{`@import url('https://fonts.googleapis.com/css2?family=Cinzel+Decorative:wght@400;700;900&display=swap');`}</style>
       
-      {/* Cloud Status */}
+      {/* Status Bar */}
       <div className="fixed bottom-4 right-4 z-50">
-        <div className={`flex items-center gap-2 px-3 py-1.5 rounded-full backdrop-blur-md border text-[10px] font-bold tracking-widest uppercase ${user ? 'bg-emerald-500/10 border-emerald-500/30 text-emerald-600' : 'bg-rose-500/10 border-rose-500/30 text-rose-600 animate-pulse'}`}>
-          <Cloud size={12} />
-          {user ? 'Cloud Synced' : 'Syncing...'}
+        <div className={`flex items-center gap-2 px-3 py-1.5 rounded-full backdrop-blur-md border text-[10px] font-bold tracking-widest uppercase transition-all ${user ? 'bg-emerald-500/10 border-emerald-500/30 text-emerald-600' : 'bg-rose-500/10 border-rose-500/30 text-rose-500'}`}>
+          <Cloud size={12} className={!user ? 'animate-pulse' : ''} />
+          {user ? 'Cloud Synced' : 'Offline Mode'}
         </div>
       </div>
 
@@ -215,52 +218,53 @@ export default function App() {
           <div className="h-1 w-24 bg-slate-800 rounded-full mt-1 opacity-20" />
         </div>
         <nav className="flex gap-2 backdrop-blur-xl bg-white/20 p-1.5 rounded-full border border-white/30 shadow-sm">
-          <button onClick={() => setView('checkin')} className={`px-5 py-2 rounded-full transition-all text-[10px] font-black uppercase tracking-widest ${view === 'checkin' ? 'bg-white shadow-md text-slate-800' : 'text-slate-500 hover:bg-white/30'}`} style={{ fontFamily: "'Cinzel Decorative', serif" }}>Reflect</button>
-          <button onClick={() => setView('dashboard')} className={`px-5 py-2 rounded-full transition-all text-[10px] font-black uppercase tracking-widest ${view === 'dashboard' ? 'bg-white shadow-md text-slate-800' : 'text-slate-500 hover:bg-white/30'}`} style={{ fontFamily: "'Cinzel Decorative', serif" }}>Insights</button>
+          <button onClick={() => setView('checkin')} className={`px-6 py-2 rounded-full transition-all text-[10px] font-black uppercase tracking-widest ${view === 'checkin' ? 'bg-white shadow-md text-slate-800' : 'text-slate-500 hover:bg-white/30'}`} style={{ fontFamily: "'Cinzel Decorative', serif" }}>Reflect</button>
+          <button onClick={() => setView('dashboard')} className={`px-6 py-2 rounded-full transition-all text-[10px] font-black uppercase tracking-widest ${view === 'dashboard' ? 'bg-white shadow-md text-slate-800' : 'text-slate-500 hover:bg-white/30'}`} style={{ fontFamily: "'Cinzel Decorative', serif" }}>Insights</button>
         </nav>
       </header>
 
       <main className="w-full max-w-5xl z-10">
         <AnimatePresence mode="wait">
           {view === 'checkin' ? (
-            <motion.div key="checkin" initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, y: -10 }} className="flex flex-col gap-8">
+            <motion.div key="checkin" initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, y: -10 }} className="flex flex-col gap-8 pb-12">
               
-              <div ref={constraintsRef} className="backdrop-blur-2xl bg-white/30 p-8 md:p-12 rounded-[3.5rem] border border-white/40 shadow-xl flex flex-col items-center gap-10 min-h-[500px] relative overflow-hidden">
+              {/* Mirror Area */}
+              <div ref={constraintsRef} className="backdrop-blur-2xl bg-white/30 p-10 rounded-[4rem] border border-white/40 shadow-xl flex flex-col items-center gap-12 min-h-[500px] relative overflow-hidden">
                 <div className="text-center z-10 pointer-events-none">
                   <h2 className="text-2xl font-bold text-slate-800 mb-1" style={{ fontFamily: "'Cinzel Decorative', serif" }}>Fluid Release</h2>
-                  <p className="text-sm text-slate-500 italic">Drag to release. Tap palette to log a quadrant.</p>
+                  <p className="text-sm text-slate-500 italic">Drag to release tension. Tap palette to log.</p>
                 </div>
                 
                 <div className="relative flex-1 flex items-center justify-center w-full min-h-[250px]">
                   <motion.div 
-                    drag dragConstraints={constraintsRef} dragElastic={0.6} 
-                    style={{ x, y, rotateX, rotateY }} 
+                    drag dragConstraints={constraintsRef} dragElastic={0.6} style={{ x, y, rotateX, rotateY }} 
                     onDragEnd={() => { x.set(0); y.set(0); }}
-                    className={`z-20 w-48 h-48 md:w-56 md:h-56 shadow-2xl backdrop-blur-3xl transition-colors duration-1000 ${activeTheme.glass} ${activeTheme.glow} border border-white/60 flex items-center justify-center cursor-grab active:cursor-grabbing rounded-full`}
+                    className={`z-20 w-56 h-56 shadow-2xl backdrop-blur-3xl transition-colors duration-1000 ${activeTheme.glass} ${activeTheme.glow} border border-white/60 flex items-center justify-center cursor-grab active:cursor-grabbing rounded-full`}
                   >
                     <div className={activeTheme.accent}>{activeTheme.icon}</div>
                   </motion.div>
                 </div>
 
-                <div className="grid grid-cols-5 gap-3 md:gap-6 w-full max-w-lg z-10">
+                <div className="grid grid-cols-5 gap-4 w-full max-w-lg z-10">
                   {Object.entries(MOOD_THEMES).map(([key, theme]) => (
-                    <button key={key} onClick={() => setCurrentMood(key)} className={`group flex flex-col items-center gap-2 p-2 rounded-2xl transition-all ${currentMood === key ? `bg-white/60 ${theme.glow} scale-110` : 'hover:bg-white/20'}`}>
-                      <div className={`w-8 h-8 rounded-full border-2 border-white ${theme.glass.replace('/20', '')}`} />
-                      <span className="text-[7px] font-black uppercase tracking-widest text-slate-500" style={{ fontFamily: "'Cinzel Decorative', serif" }}>{key}</span>
+                    <button key={key} onClick={() => setCurrentMood(key)} className={`group flex flex-col items-center gap-2 p-2 rounded-3xl transition-all ${currentMood === key ? `bg-white/60 ${theme.glow} scale-110 shadow-lg` : 'hover:bg-white/20'}`}>
+                      <div className={`w-10 h-10 rounded-full border-2 border-white ${theme.glass.replace('/20', '')}`} />
+                      <span className="text-[8px] font-black uppercase tracking-widest text-slate-500" style={{ fontFamily: "'Cinzel Decorative', serif" }}>{key}</span>
                     </button>
                   ))}
                 </div>
               </div>
 
+              {/* Temporal Pulse Calendar */}
               <div className="backdrop-blur-xl bg-white/30 p-8 rounded-[3rem] border border-white/40 shadow-sm flex flex-col gap-6">
                 <div className="flex justify-between items-center flex-wrap gap-4">
                   <div className="flex items-center gap-3">
                     <CalendarIcon size={20} className="text-slate-700" />
                     <h3 className="text-lg font-bold text-slate-800 uppercase tracking-widest" style={{ fontFamily: "'Cinzel Decorative', serif" }}>Temporal Pulse</h3>
                   </div>
-                  <div className="flex items-center gap-2 bg-white/40 px-3 py-1.5 rounded-full border border-white/50 text-[10px] font-black">
+                  <div className="flex items-center gap-2 bg-white/40 px-4 py-1.5 rounded-full border border-white/50 text-[10px] font-black">
                     <ChevronLeft size={16} className="cursor-pointer" onClick={() => changeDate(-1)} />
-                    <span className="w-28 text-center" style={{ fontFamily: "'Cinzel Decorative', serif" }}>{selectedDate.toLocaleDateString('en-IN', { month: 'short', day: 'numeric' }).toUpperCase()}</span>
+                    <span className="w-28 text-center" style={{ fontFamily: "'Cinzel Decorative', serif" }}>{formatDisplayDate(selectedDate)}</span>
                     <ChevronRight size={16} className="cursor-pointer" onClick={() => changeDate(1)} />
                   </div>
                 </div>
@@ -272,58 +276,39 @@ export default function App() {
                     const isCurrentSlot = isToday && slot.id === currentSlotId;
 
                     return (
-                      <button 
-                        key={slot.id} 
-                        onClick={() => handleSlotClick(slot.id)} 
-                        className={`p-4 rounded-[2rem] border transition-all flex flex-col items-center gap-2 ${moodAtSlot ? `${slotTheme.glass} border-white/50 ${slotTheme.glow}` : 'bg-white/10 border-white/20 hover:bg-white/30'} ${isCurrentSlot ? 'ring-2 ring-slate-800/20 shadow-lg' : ''}`}
-                      >
+                      <button key={slot.id} onClick={() => handleSlotClick(slot.id)} className={`p-4 rounded-[2rem] border transition-all flex flex-col items-center gap-2 ${moodAtSlot ? `${slotTheme.glass} border-white/50 ${slotTheme.glow}` : 'bg-white/10 border-white/20 hover:bg-white/30'} ${isCurrentSlot ? 'ring-2 ring-slate-800/20' : ''}`}>
                         <span className="text-[8px] font-black uppercase tracking-widest text-slate-400" style={{ fontFamily: "'Cinzel Decorative', serif" }}>{slot.period}</span>
-                        <div className="h-8 flex items-center justify-center">
-                          {moodAtSlot && <div className={slotTheme.accent}>{slotTheme.icon}</div>}
-                        </div>
+                        <div className="h-8 flex items-center justify-center">{moodAtSlot && <div className={slotTheme.accent}>{slotTheme.icon}</div>}</div>
                         <span className="text-[10px] text-slate-500 font-medium italic">{slot.label}</span>
                       </button>
                     );
                   })}
                 </div>
               </div>
+
+              {/* Voice Box */}
+              <div className="backdrop-blur-xl bg-white/20 p-8 rounded-[2.5rem] border border-white/30 flex items-center justify-between shadow-sm">
+                <div className="flex gap-6 items-center">
+                  <div className="p-5 rounded-full bg-white/40 text-slate-600"><Mic size={28} /></div>
+                  <div>
+                    <h3 className="text-xl font-bold text-slate-800" style={{ fontFamily: "'Cinzel Decorative', serif" }}>Voice Journal</h3>
+                    <p className="text-sm text-slate-600 italic">Log deep emotional nuances.</p>
+                  </div>
+                </div>
+                <button className="px-10 py-4 rounded-full font-black tracking-widest bg-slate-800 text-white hover:bg-slate-700" style={{ fontFamily: "'Cinzel Decorative', serif" }}>Record</button>
+              </div>
             </motion.div>
           ) : (
-            <motion.div key="dashboard" initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} className="flex flex-col gap-8">
-              <div className="backdrop-blur-3xl bg-slate-800/95 text-white p-10 rounded-[4rem] border border-white/10 shadow-2xl relative overflow-hidden flex flex-col items-center text-center">
-                <Moon className="absolute -top-10 -right-10 w-48 h-48 opacity-5 text-white" />
-                {!currentDaySummary ? (
-                  <div className="py-12 flex flex-col items-center gap-6 z-10">
+            <motion.div key="dashboard" initial={{ opacity: 0 }} animate={{ opacity: 1 }} className="flex flex-col gap-8">
+              <div className="backdrop-blur-3xl bg-slate-800/95 text-white p-12 rounded-[4rem] border border-white/10 shadow-2xl flex flex-col items-center text-center">
+                {!currentSummary ? (
+                  <div className="py-12 flex flex-col items-center gap-6">
                     <Star className="text-amber-400 fill-amber-400" size={32} />
-                    <h3 className="text-2xl font-black uppercase tracking-widest" style={{ fontFamily: "'Cinzel Decorative', serif" }}>Daily Synthesis</h3>
-                    <button 
-                      onClick={generateSummary}
-                      disabled={isGenerating || Object.keys(calendarData[getDateKey(selectedDate)] || {}).length < 1}
-                      className="mt-4 px-10 py-4 bg-white text-slate-900 rounded-full font-black uppercase tracking-[0.2em] text-[10px] shadow-xl disabled:opacity-20 flex items-center gap-2"
-                      style={{ fontFamily: "'Cinzel Decorative', serif" }}
-                    >
-                      {isGenerating && <Loader2 className="animate-spin" size={14} />}
-                      {isGenerating ? 'Synthesizing...' : 'Generate Reflection'}
-                    </button>
+                    <h3 className="text-2xl font-black uppercase tracking-widest" style={{ fontFamily: "'Cinzel Decorative', serif" }}>Synthesis</h3>
+                    <button onClick={generateSummary} disabled={isGenerating} className="px-10 py-4 bg-white text-slate-900 rounded-full font-black text-[10px] uppercase tracking-widest disabled:opacity-30">{isGenerating ? 'Analyzing...' : 'Generate'}</button>
                   </div>
                 ) : (
-                  <div className="flex flex-col items-center gap-8 z-10 w-full">
-                    <p className="text-xl md:text-3xl font-medium italic leading-relaxed text-slate-100">"{currentDaySummary.message}"</p>
-                    <div className="grid grid-cols-2 md:grid-cols-3 gap-4 w-full">
-                      <div className="bg-white/5 p-6 rounded-3xl border border-white/10 flex flex-col items-center">
-                        <span className="text-[10px] font-bold text-emerald-400 uppercase tracking-widest mb-2">Dominant Tone</span>
-                        <span className="text-xl font-black uppercase tracking-widest" style={{ fontFamily: "'Cinzel Decorative', serif" }}>{currentDaySummary.dominant}</span>
-                      </div>
-                      <div className="bg-white/5 p-6 rounded-3xl border border-white/10 flex flex-col items-center">
-                        <span className="text-[10px] font-bold text-sky-400 uppercase tracking-widest mb-2">Daily Vitality</span>
-                        <span className="text-2xl font-black">{currentDaySummary.energy}%</span>
-                      </div>
-                      <div className="bg-white/5 p-6 rounded-3xl border border-white/10 flex flex-col items-center col-span-2 md:col-span-1">
-                        <span className="text-[10px] font-bold text-indigo-400 uppercase tracking-widest mb-2">Mindset</span>
-                        <span className="text-xl font-black uppercase tracking-widest" style={{ fontFamily: "'Cinzel Decorative', serif" }}>Harmonious</span>
-                      </div>
-                    </div>
-                  </div>
+                  <p className="text-xl md:text-3xl italic leading-relaxed">"{currentSummary.message}"</p>
                 )}
               </div>
             </motion.div>
@@ -331,9 +316,15 @@ export default function App() {
         </AnimatePresence>
       </main>
 
-      <footer className="mt-auto py-12 flex gap-8 opacity-20">
-         <button onClick={() => signOut(auth)} className="text-[10px] font-bold uppercase tracking-widest">Logout</button>
-      </footer>
+      <style dangerouslySetInnerHTML={{ __html: `
+        @keyframes blob-slow {
+          0% { transform: rotate(0deg) scale(1); border-radius: 42% 58% 70% 30% / 45% 45% 55% 55%; }
+          33% { transform: rotate(120deg) scale(1.05); border-radius: 50% 50% 33% 67% / 55% 27% 73% 45%; }
+          66% { transform: rotate(240deg) scale(0.95); border-radius: 33% 67% 58% 42% / 63% 30% 70% 37%; }
+          100% { transform: rotate(360deg) scale(1); border-radius: 42% 58% 70% 30% / 45% 45% 55% 55%; }
+        }
+        .animate-blob-slow { animation: blob-slow 20s infinite linear; }
+      `}} />
     </div>
   );
 }

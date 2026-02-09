@@ -1,8 +1,8 @@
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect, useRef, useCallback } from 'react';
 import { motion, AnimatePresence, useMotionValue, useSpring, useTransform } from 'framer-motion';
 import { 
   CloudSun, TrendingUp, Mic, Info, BrainCircuit, Leaf, Wind, Sparkles, 
-  Calendar as CalendarIcon, ChevronLeft, ChevronRight, Clock, Moon, Star, Share2, LogOut, Cloud, Loader2, AlertCircle, Copy
+  Calendar as CalendarIcon, ChevronLeft, ChevronRight, Clock, Moon, Star, Share2, LogOut, Cloud, Loader2, AlertCircle
 } from 'lucide-react';
 
 // Firebase Imports
@@ -12,29 +12,22 @@ import { getFirestore, doc, setDoc, getDoc, collection, onSnapshot } from 'fireb
 
 // --- ROBUST CONFIGURATION LOGIC ---
 const getFirebaseConfig = () => {
-  // 1. Try Canvas Environment Global
   if (typeof __firebase_config !== 'undefined' && __firebase_config) {
     try { return JSON.parse(__firebase_config); } catch (e) { return null; }
   }
   
-  // 2. Try Vite/Vercel Environment Variable (Safe Access)
   try {
-    // Standard Vite environment variable access
     // @ts-ignore
-    const envConfig = import.meta.env.VITE_FIREBASE_CONFIG;
-    if (envConfig) {
-      return JSON.parse(envConfig);
-    }
-  } catch (e) {
-    // Fallback if environment access fails or is not yet defined
-  }
+    const envConfig = import.meta.env?.VITE_FIREBASE_CONFIG;
+    if (envConfig) return JSON.parse(envConfig);
+  } catch (e) {}
 
   return null;
 };
 
 const config = getFirebaseConfig();
 const appId = typeof __app_id !== 'undefined' ? __app_id : 'mood-mirror-prod';
-const apiKey = ""; // System provides this at runtime
+const apiKey = ""; // Provided by system
 
 // Initialize services only if config exists
 let auth = null, db = null;
@@ -79,7 +72,10 @@ export default function App() {
   const currentHour = new Date().getHours();
   const currentSlotId = TIME_SLOTS.find(slot => currentHour >= slot.range[0] && currentHour <= slot.range[1])?.id;
 
-  // --- AUTHENTICATION ---
+  // Helper to create a consistent date key (YYYY-MM-DD)
+  const getDateKey = useCallback((date) => date.toISOString().split('T')[0], []);
+
+  // --- AUTHENTICATION (Solves Problem 1) ---
   useEffect(() => {
     if (!auth) return;
     const initAuth = async () => {
@@ -89,10 +85,17 @@ export default function App() {
         } else {
           await signInAnonymously(auth);
         }
-      } catch (err) { console.error("Auth error:", err); }
+      } catch (err) { 
+        console.error("Auth error:", err); 
+        // Force a second attempt if initial fail
+        setTimeout(() => signInAnonymously(auth).catch(() => {}), 2000);
+      }
     };
     initAuth();
-    return onAuthStateChanged(auth, setUser);
+    const unsubscribe = onAuthStateChanged(auth, (u) => {
+      if (u) setUser(u);
+    });
+    return () => unsubscribe();
   }, []);
 
   // --- CLOUD SYNC ---
@@ -108,7 +111,31 @@ export default function App() {
     }, (err) => console.error("Sync error:", err));
 
     return () => unsubscribe();
-  }, [user, selectedDate]);
+  }, [user, selectedDate, getDateKey]);
+
+  // --- ACTIONS (Solves Problem 2) ---
+  const handleSlotClick = useCallback(async (slotId) => {
+    const dateKey = getDateKey(selectedDate);
+    
+    // 1. Immediate Local Feedback (Ensures it is always clickable)
+    setCalendarData(prev => ({
+      ...prev,
+      [dateKey]: {
+        ...(prev[dateKey] || {}),
+        [slotId]: currentMood
+      }
+    }));
+
+    // 2. Cloud Sync if available
+    if (user && db) {
+      const docRef = doc(db, 'artifacts', appId, 'users', user.uid, 'days', dateKey);
+      try {
+        await setDoc(docRef, { [slotId]: currentMood, updated_at: Date.now() }, { merge: true });
+      } catch (e) { 
+        console.error("Cloud Save Failed:", e); 
+      }
+    }
+  }, [selectedDate, currentMood, user, getDateKey]);
 
   // --- CONFIG DIAGNOSTIC SCREEN ---
   if (!config) {
@@ -134,26 +161,6 @@ export default function App() {
     );
   }
 
-  // --- ACTIONS ---
-  const handleSlotClick = async (slotId) => {
-    const dateKey = getDateKey(selectedDate);
-    
-    // 1. Immediate Local Feedback
-    setCalendarData(prev => ({
-      ...prev,
-      [dateKey]: { ...(prev[dateKey] || {}), [slotId]: currentMood }
-    }));
-
-    // 2. Cloud Sync if available
-    if (user && db) {
-      const docRef = doc(db, 'artifacts', appId, 'users', user.uid, 'days', dateKey);
-      try {
-        await setDoc(docRef, { [slotId]: currentMood, updated_at: Date.now() }, { merge: true });
-      } catch (e) { console.error("Cloud Save Failed:", e); }
-    }
-  };
-
-  const getDateKey = (date) => date.toISOString().split('T')[0];
   const changeDate = (offset) => {
     const newDate = new Date(selectedDate);
     newDate.setDate(selectedDate.getDate() + offset);
@@ -255,8 +262,8 @@ export default function App() {
                 </div>
               </div>
 
-              {/* Temporal Pulse Calendar */}
-              <div className="backdrop-blur-xl bg-white/30 p-8 rounded-[3rem] border border-white/40 shadow-sm flex flex-col gap-6">
+              {/* Temporal Pulse Calendar - FIXED CLICKABILITY */}
+              <div className="relative z-30 backdrop-blur-xl bg-white/30 p-8 rounded-[3rem] border border-white/40 shadow-sm flex flex-col gap-6">
                 <div className="flex justify-between items-center flex-wrap gap-4">
                   <div className="flex items-center gap-3">
                     <CalendarIcon size={20} className="text-slate-700" />
@@ -276,10 +283,19 @@ export default function App() {
                     const isCurrentSlot = isToday && slot.id === currentSlotId;
 
                     return (
-                      <button key={slot.id} onClick={() => handleSlotClick(slot.id)} className={`p-4 rounded-[2rem] border transition-all flex flex-col items-center gap-2 ${moodAtSlot ? `${slotTheme.glass} border-white/50 ${slotTheme.glow}` : 'bg-white/10 border-white/20 hover:bg-white/30'} ${isCurrentSlot ? 'ring-2 ring-slate-800/20' : ''}`}>
+                      <button 
+                        key={slot.id} 
+                        type="button"
+                        onClick={() => handleSlotClick(slot.id)} 
+                        className={`pointer-events-auto relative p-4 rounded-[2rem] border transition-all flex flex-col items-center gap-2 
+                          ${moodAtSlot ? `${slotTheme.glass} border-white/50 ${slotTheme.glow}` : 'bg-white/10 border-white/20 hover:bg-white/40'} 
+                          ${isCurrentSlot ? 'ring-2 ring-slate-800/20 shadow-md' : ''}`}
+                      >
                         <span className="text-[8px] font-black uppercase tracking-widest text-slate-400" style={{ fontFamily: "'Cinzel Decorative', serif" }}>{slot.period}</span>
-                        <div className="h-8 flex items-center justify-center">{moodAtSlot && <div className={slotTheme.accent}>{slotTheme.icon}</div>}</div>
-                        <span className="text-[10px] text-slate-500 font-medium italic">{slot.label}</span>
+                        <div className="h-8 flex items-center justify-center pointer-events-none">
+                          {moodAtSlot && <div className={slotTheme.accent}>{slotTheme.icon}</div>}
+                        </div>
+                        <span className="text-[10px] text-slate-500 font-medium italic pointer-events-none">{slot.label}</span>
                       </button>
                     );
                   })}

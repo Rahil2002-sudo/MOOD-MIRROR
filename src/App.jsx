@@ -34,7 +34,7 @@ const { firebase: config, gemini: geminiApiKey } = getEnvConfig();
 const appId = typeof __app_id !== 'undefined' ? __app_id : 'mood-mirror-prod';
 const apiKey = ""; // System provided
 
-// Initialize services only if config exists
+// Initialize services safely
 let auth = null, db = null;
 if (config && config.apiKey) {
   try {
@@ -46,12 +46,58 @@ if (config && config.apiKey) {
   }
 }
 
+// --- THEME CONSTANTS ---
 const MOOD_THEMES = {
-  joy: { glass: 'bg-emerald-400/20', accent: 'text-emerald-700', bg: 'from-emerald-100 to-teal-50', blob: 'bg-emerald-300', glow: 'shadow-[0_0_35px_rgba(16,185,129,0.5)]', text: 'Growth & Joy', icon: <Leaf className="w-6 h-6 md:w-8 md:h-8" /> },
-  anxiety: { glass: 'bg-amber-400/20', accent: 'text-amber-700', bg: 'from-orange-50 to-amber-100', blob: 'bg-amber-300', glow: 'shadow-[0_0_35px_rgba(245,158,11,0.5)]', text: 'Restless', icon: <Wind className="w-6 h-6 md:w-8 md:h-8" /> },
-  stress: { glass: 'bg-rose-400/20', accent: 'text-rose-700', bg: 'from-rose-50 to-slate-100', blob: 'bg-rose-300', glow: 'shadow-[0_0_35px_rgba(225,29,72,0.5)]', text: 'High Intensity', icon: <Sparkles className="w-6 h-6 md:w-8 md:h-8" /> },
-  calm: { glass: 'bg-sky-400/20', accent: 'text-sky-700', bg: 'from-sky-100 to-indigo-50', blob: 'bg-sky-300', glow: 'shadow-[0_0_35px_rgba(14,165,233,0.5)]', text: 'Deep Peace', icon: <CloudSun className="w-6 h-6 md:w-8 md:h-8" /> },
-  low: { glass: 'bg-indigo-400/20', accent: 'text-indigo-800', bg: 'from-slate-200 to-indigo-100', blob: 'bg-indigo-300', glow: 'shadow-[0_0_35px_rgba(99,102,241,0.5)]', text: 'Stillness', icon: <Sparkles className="w-6 h-6 md:w-8 md:h-8" /> }
+  joy: { 
+    glass: 'bg-emerald-400/20', 
+    solid: '#34d399',
+    accent: 'text-emerald-700', 
+    bg: 'from-emerald-100 to-teal-50', 
+    blob: 'bg-emerald-300', 
+    glow: 'shadow-[0_0_35px_rgba(16,185,129,0.5)]', 
+    text: 'Growth & Joy', 
+    icon: <Leaf className="w-full h-full" /> 
+  },
+  anxiety: { 
+    glass: 'bg-amber-400/20', 
+    solid: '#fbbf24',
+    accent: 'text-amber-700', 
+    bg: 'from-orange-50 to-amber-100', 
+    blob: 'bg-amber-300', 
+    glow: 'shadow-[0_0_35px_rgba(245,158,11,0.5)]', 
+    text: 'Restless', 
+    icon: <Wind className="w-full h-full" /> 
+  },
+  stress: { 
+    glass: 'bg-rose-400/20', 
+    solid: '#fb7185',
+    accent: 'text-rose-700', 
+    bg: 'from-rose-50 to-slate-100', 
+    blob: 'bg-rose-300', 
+    glow: 'shadow-[0_0_35px_rgba(225,29,72,0.5)]', 
+    text: 'High Intensity', 
+    icon: <Sparkles className="w-full h-full" /> 
+  },
+  calm: { 
+    glass: 'bg-sky-400/20', 
+    solid: '#38bdf8',
+    accent: 'text-sky-700', 
+    bg: 'from-sky-100 to-indigo-50', 
+    blob: 'bg-sky-300', 
+    glow: 'shadow-[0_0_35px_rgba(14,165,233,0.5)]', 
+    text: 'Deep Peace', 
+    icon: <CloudSun className="w-full h-full" /> 
+  },
+  low: { 
+    glass: 'bg-indigo-400/20', 
+    solid: '#818cf8',
+    accent: 'text-indigo-800', 
+    bg: 'from-slate-200 to-indigo-100', 
+    blob: 'bg-indigo-300', 
+    glow: 'shadow-[0_0_35px_rgba(99,102,241,0.5)]', 
+    text: 'Stillness', 
+    icon: <Moon className="w-full h-full" /> 
+  }
 };
 
 const TIME_SLOTS = [
@@ -90,11 +136,9 @@ export default function App() {
     return d.toISOString().split('T')[0];
   }, []);
 
+  // Sync Logic
   useEffect(() => {
-    if (!auth) {
-      setAuthError("No config found");
-      return;
-    }
+    if (!auth) return;
     const initAuth = async () => {
       try {
         if (typeof __initial_auth_token !== 'undefined' && __initial_auth_token) {
@@ -155,10 +199,6 @@ export default function App() {
     setSelectedDate(newDate);
   };
 
-  const formatDisplayDate = (date) => {
-    return date.toLocaleDateString('en-IN', { month: 'short', day: 'numeric', year: 'numeric' }).toUpperCase();
-  };
-
   const generateSummary = async () => {
     if (!user || isGenerating) return;
     const dateKey = getDateKey(selectedDate);
@@ -166,7 +206,7 @@ export default function App() {
     if (!dayData) return;
     setIsGenerating(true);
     const moods = Object.entries(dayData).filter(([k]) => k.startsWith('q')).map(([k, v]) => `${k}: ${v}`).join(', ');
-    const prompt = `Analyze these daily moods: ${moods}. Provide a short poetic summary of exactly two sentences. Return only JSON: {"message": "Your summary here"}`;
+    const prompt = `Analyze: ${moods}. 2-sentence poetic summary. JSON: {"message": "..."}`;
     try {
       const finalKey = geminiApiKey || apiKey;
       const response = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-preview-09-2025:generateContent?key=${finalKey}`, {
@@ -188,14 +228,20 @@ export default function App() {
       <style>{`@import url('https://fonts.googleapis.com/css2?family=Cinzel+Decorative:wght@400;700;900&display=swap');`}</style>
       
       {/* Sync Status Badge */}
-      <div className="fixed bottom-4 right-4 z-50 group">
+      <div className="fixed bottom-4 right-4 z-[100] group">
         <div className={`flex items-center gap-2 px-3 py-1.5 rounded-full backdrop-blur-md border text-[9px] font-black uppercase tracking-widest transition-all ${user ? 'bg-emerald-500/10 border-emerald-500/30 text-emerald-600' : 'bg-rose-500/10 border-rose-500/30 text-rose-500'}`}>
           <Cloud size={12} className={!user ? 'animate-pulse' : ''} />
           {user ? 'Cloud Synced' : authError ? 'Config Error' : 'Syncing...'}
         </div>
+        {authError && !user && (
+          <div className="absolute bottom-10 right-0 bg-white p-3 rounded-2xl shadow-xl text-[10px] text-rose-600 w-56 hidden group-hover:block z-[110] border border-rose-100">
+            <p className="font-bold mb-1">Connection Blocked</p>
+            <p className="opacity-80">Enable 'Anonymous Auth' in Firebase Console & ensure your config is valid JSON.</p>
+          </div>
+        )}
       </div>
 
-      <header className="w-full max-w-5xl flex flex-col md:flex-row justify-between items-center mb-8 md:mb-12 z-10 gap-4">
+      <header className="w-full max-w-5xl flex flex-col md:flex-row justify-between items-center mb-8 md:mb-12 z-20 gap-4">
         <div className="flex flex-col items-center md:items-start">
           <h1 className="text-2xl md:text-4xl font-black uppercase tracking-widest text-slate-800" style={{ fontFamily: "'Cinzel Decorative', serif" }}>Mood Mirror</h1>
           <div className="h-1 w-16 md:w-24 bg-slate-800 rounded-full mt-1 opacity-20 hidden md:block" />
@@ -211,62 +257,81 @@ export default function App() {
           {view === 'checkin' ? (
             <motion.div key="checkin" initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, y: -10 }} className="flex flex-col gap-6 md:gap-8 pb-12">
               
-              {/* Mirror Area */}
+              {/* Mirror Area - Draggable Container */}
               <div ref={constraintsRef} className="z-10 relative backdrop-blur-2xl bg-white/30 p-6 md:p-10 rounded-[2.5rem] md:rounded-[4rem] border border-white/40 shadow-xl flex flex-col items-center gap-8 md:gap-12 min-h-[400px] md:min-h-[500px] overflow-hidden">
                 <div className="text-center z-20">
                   <h2 className="text-lg md:text-2xl font-bold text-slate-800 mb-1" style={{ fontFamily: "'Cinzel Decorative', serif" }}>Fluid Release</h2>
-                  <p className="text-xs md:text-sm text-slate-500 italic">Drag to release tension. Tap below to log.</p>
+                  <p className="text-xs md:text-sm text-slate-500 italic">Drag to release. Tap palette to log.</p>
                 </div>
                 
-                <div className="relative flex-1 flex items-center justify-center w-full min-h-[200px] md:min-h-[250px]">
+                <div className="relative flex-1 flex items-center justify-center w-full min-h-[200px] pointer-events-none">
                   <motion.div 
                     drag dragConstraints={constraintsRef} dragElastic={0.6} style={{ x, y, rotateX, rotateY }} 
                     onDragEnd={() => { x.set(0); y.set(0); }}
-                    className={`z-30 w-40 h-40 md:w-56 md:h-56 shadow-2xl backdrop-blur-3xl transition-colors duration-1000 ${activeTheme.glass} ${activeTheme.glow} border border-white/60 flex items-center justify-center cursor-grab active:cursor-grabbing rounded-full`}
+                    className={`pointer-events-auto z-30 w-36 h-36 md:w-56 md:h-56 shadow-2xl backdrop-blur-3xl transition-colors duration-1000 ${activeTheme.glass} ${activeTheme.glow} border border-white/60 flex items-center justify-center cursor-grab active:cursor-grabbing rounded-full p-8`}
                   >
-                    <div className={activeTheme.accent}>{activeTheme.icon}</div>
+                    <div className={`${activeTheme.accent} w-12 h-12 md:w-20 md:h-20`}>{activeTheme.icon}</div>
                   </motion.div>
                 </div>
 
-                <div className="grid grid-cols-5 gap-2 md:gap-4 w-full max-w-lg z-20">
+                {/* Palette with Explicit Icons and Fixed Colors */}
+                <div className="grid grid-cols-5 gap-3 md:gap-6 w-full max-w-lg z-20">
                   {Object.entries(MOOD_THEMES).map(([key, theme]) => (
-                    <button key={key} onClick={() => setCurrentMood(key)} className={`group flex flex-col items-center gap-1 md:gap-2 p-1.5 md:p-2 rounded-2xl transition-all ${currentMood === key ? `bg-white/60 ${theme.glow} scale-110 shadow-lg` : 'hover:bg-white/20'}`}>
-                      <div className={`w-8 h-8 md:w-10 md:h-10 rounded-full border-2 border-white ${theme.glass.replace('/20', '')}`} />
+                    <button 
+                      key={key} 
+                      onClick={() => setCurrentMood(key)} 
+                      className={`group flex flex-col items-center gap-2 p-1.5 rounded-3xl transition-all ${currentMood === key ? `bg-white/60 ${theme.glow} scale-110 shadow-lg` : 'hover:bg-white/20'}`}
+                    >
+                      <div 
+                        className={`w-10 h-10 md:w-12 md:h-12 rounded-full border-2 border-white flex items-center justify-center p-2.5 transition-all
+                          ${currentMood === key ? 'opacity-100' : 'opacity-60'}`}
+                        style={{ backgroundColor: theme.solid }}
+                      >
+                        <div className="text-white w-full h-full">{theme.icon}</div>
+                      </div>
                       <span className="text-[7px] md:text-[8px] font-black uppercase tracking-widest text-slate-500" style={{ fontFamily: "'Cinzel Decorative', serif" }}>{key}</span>
                     </button>
                   ))}
                 </div>
               </div>
 
-              {/* Temporal Pulse Calendar */}
-              <div className="relative z-40 backdrop-blur-xl bg-white/30 p-6 md:p-8 rounded-[2.5rem] md:rounded-[3rem] border border-white/40 shadow-sm flex flex-col gap-4 md:gap-6">
+              {/* Temporal Pulse Calendar - FIXED CLICKABILITY & RESPONSIVENESS */}
+              <div className="relative z-[60] backdrop-blur-xl bg-white/40 p-6 md:p-8 rounded-[2.5rem] md:rounded-[3rem] border border-white/60 shadow-lg flex flex-col gap-6">
                 <div className="flex flex-col sm:flex-row justify-between items-center gap-4">
                   <div className="flex items-center gap-3">
                     <CalendarIcon size={18} className="text-slate-700" />
                     <h3 className="text-md md:text-lg font-bold text-slate-800 uppercase tracking-widest" style={{ fontFamily: "'Cinzel Decorative', serif" }}>Temporal Pulse</h3>
                   </div>
-                  <div className="flex items-center gap-2 bg-white/40 px-3 md:px-4 py-1.5 rounded-full border border-white/50 text-[9px] md:text-[10px] font-black">
-                    <ChevronLeft size={14} className="cursor-pointer" onClick={() => changeDate(-1)} />
-                    <span className="w-24 md:w-28 text-center">{formatDisplayDate(selectedDate)}</span>
-                    <ChevronRight size={14} className="cursor-pointer" onClick={() => changeDate(1)} />
+                  <div className="flex items-center gap-2 bg-white/60 px-4 py-1.5 rounded-full border border-white/80 text-[9px] md:text-[10px] font-black shadow-sm">
+                    <ChevronLeft size={14} className="cursor-pointer hover:text-slate-400" onClick={() => changeDate(-1)} />
+                    <span className="w-24 md:w-28 text-center">{selectedDate.toLocaleDateString('en-IN', { month: 'short', day: 'numeric' }).toUpperCase()}</span>
+                    <ChevronRight size={14} className="cursor-pointer hover:text-slate-400" onClick={() => changeDate(1)} />
                   </div>
                 </div>
                 <div className="grid grid-cols-2 lg:grid-cols-4 gap-3 md:gap-4">
                   {TIME_SLOTS.map((slot) => {
-                    const moodAtSlot = calendarData[getDateKey(selectedDate)]?.[slot.id];
-                    const slotTheme = moodAtSlot ? MOOD_THEMES[moodAtSlot] : null;
+                    const moodId = calendarData[getDateKey(selectedDate)]?.[slot.id];
+                    const moodTheme = moodId ? MOOD_THEMES[moodId] : null;
+                    const isCurrent = getDateKey(selectedDate) === getDateKey(new Date()) && slot.id === currentSlotId;
+
                     return (
                       <button 
                         key={slot.id} 
+                        type="button"
                         onClick={() => handleSlotClick(slot.id)} 
-                        className={`pointer-events-auto relative p-3 md:p-4 rounded-[1.5rem] md:rounded-[2rem] border transition-all flex flex-col items-center gap-1 md:gap-2 min-h-[80px] md:min-h-[100px] 
-                          ${moodAtSlot ? `${slotTheme.glass} border-white/50 ${slotTheme.glow}` : 'bg-white/10 border-white/20 hover:bg-white/40'}`}
+                        className={`pointer-events-auto relative p-4 rounded-[1.8rem] md:rounded-[2.2rem] border transition-all flex flex-col items-center gap-2 min-h-[90px] md:min-h-[110px] 
+                          ${moodId ? `${moodTheme.glass} border-white/80 ${moodTheme.glow}` : 'bg-white/20 border-white/30 hover:bg-white/60'}
+                          ${isCurrent ? 'ring-2 ring-slate-800/20' : ''}`}
                       >
-                        <span className="text-[7px] md:text-[8px] font-black uppercase tracking-widest text-slate-400">{slot.period}</span>
-                        <div className="h-6 md:h-8 flex items-center justify-center pointer-events-none">
-                          {moodAtSlot && <div className={slotTheme.accent}>{React.cloneElement(slotTheme.icon, { size: 16 })}</div>}
+                        <span className="text-[7px] md:text-[8px] font-black uppercase tracking-widest text-slate-500">{slot.period}</span>
+                        <div className="h-8 md:h-10 flex items-center justify-center pointer-events-none">
+                          {moodId ? (
+                            <div className={`${moodTheme.accent} w-6 h-6 md:w-8 md:h-8`}>{moodTheme.icon}</div>
+                          ) : (
+                             <div className="w-6 h-6 md:w-8 md:h-8 border-2 border-dashed border-slate-300 rounded-full opacity-30" />
+                          )}
                         </div>
-                        <span className="text-[8px] md:text-[10px] text-slate-500 font-medium italic pointer-events-none">{slot.label}</span>
+                        <span className="text-[8px] md:text-[9px] text-slate-400 font-bold tracking-tighter uppercase pointer-events-none">{slot.label}</span>
                       </button>
                     );
                   })}
@@ -274,29 +339,44 @@ export default function App() {
               </div>
 
               {/* Voice Journal */}
-              <div className="backdrop-blur-xl bg-white/20 p-6 md:p-8 rounded-[2rem] md:rounded-[2.5rem] border border-white/30 flex flex-col sm:flex-row items-center justify-between shadow-sm gap-4">
+              <div className="relative z-20 backdrop-blur-xl bg-white/20 p-6 md:p-8 rounded-[2rem] md:rounded-[2.5rem] border border-white/30 flex flex-col sm:flex-row items-center justify-between shadow-sm gap-4">
                 <div className="flex gap-4 md:gap-6 items-center">
-                  <div className="p-4 md:p-5 rounded-full bg-white/40 text-slate-600"><Mic size={24} md:size={28} /></div>
-                  <h3 className="text-lg md:text-xl font-bold text-slate-800" style={{ fontFamily: "'Cinzel Decorative', serif" }}>Voice Journal</h3>
+                  <div className="p-4 md:p-5 rounded-full bg-white/40 text-slate-600"><Mic size={24} /></div>
+                  <h3 className="text-lg md:text-xl font-bold text-slate-800 tracking-widest" style={{ fontFamily: "'Cinzel Decorative', serif" }}>Voice Journal</h3>
                 </div>
-                <button className="w-full sm:w-auto px-8 md:px-10 py-3 md:py-4 rounded-full font-black tracking-widest bg-slate-800 text-white hover:bg-slate-700 transition-colors" style={{ fontFamily: "'Cinzel Decorative', serif" }}>Record</button>
+                <button className="w-full sm:w-auto px-8 md:px-12 py-3 md:py-4 rounded-full font-black tracking-[0.2em] text-[10px] bg-slate-800 text-white hover:bg-slate-700 transition-all uppercase shadow-lg">Record vibe</button>
               </div>
             </motion.div>
           ) : (
-            <motion.div key="dashboard" initial={{ opacity: 0 }} animate={{ opacity: 1 }} className="flex flex-col gap-8">
-              <div className="backdrop-blur-3xl bg-slate-800/95 text-white p-8 md:p-12 rounded-[2.5rem] md:rounded-[4rem] border border-white/10 shadow-2xl text-center flex flex-col items-center">
+            <motion.div key="dashboard" initial={{ opacity: 0 }} animate={{ opacity: 1 }} className="flex flex-col gap-8 pb-12">
+              <div className="backdrop-blur-3xl bg-slate-800/95 text-white p-8 md:p-16 rounded-[2.5rem] md:rounded-[4rem] border border-white/10 shadow-2xl text-center flex flex-col items-center">
                 {!currentSummary ? (
-                  <div className="flex flex-col items-center gap-6">
-                    <Star className="text-amber-400 fill-amber-400" size={32} />
-                    <p className="text-lg md:text-xl italic opacity-50">Log your day to generate synthesis.</p>
-                    <button onClick={generateSummary} disabled={isGenerating} className="px-8 md:px-10 py-3 md:py-4 bg-white text-slate-900 rounded-full font-black text-[10px] uppercase tracking-widest disabled:opacity-50 flex items-center gap-2">
-                      {isGenerating ? <Loader2 className="animate-spin" size={16} /> : 'Generate Synthesis'}
+                  <div className="flex flex-col items-center gap-8">
+                    <Star className="text-amber-400 fill-amber-400" size={40} />
+                    <p className="text-lg md:text-2xl italic opacity-60 font-light leading-relaxed max-w-md">Log your temporal pulse to generate a poetic synthesis of your day.</p>
+                    <button 
+                      onClick={generateSummary} 
+                      disabled={isGenerating} 
+                      className="px-10 py-5 bg-white text-slate-900 rounded-full font-black text-[11px] tracking-[0.3em] uppercase shadow-2xl disabled:opacity-50 hover:scale-105 transition-transform"
+                      style={{ fontFamily: "'Cinzel Decorative', serif" }}
+                    >
+                      {isGenerating ? <Loader2 className="animate-spin" size={20} /> : 'Generate Synthesis'}
                     </button>
                   </div>
                 ) : (
-                  <p className="text-lg md:text-3xl italic leading-relaxed max-w-2xl">
-                    {typeof currentSummary.message === 'string' ? `"${currentSummary.message}"` : 'Synthesis complete. Reflect on your journey.'}
-                  </p>
+                  <div className="flex flex-col items-center gap-10">
+                    <Star className="text-amber-400 fill-amber-400" size={24} />
+                    <p className="text-xl md:text-4xl italic leading-tight max-w-3xl font-medium text-slate-100">
+                      "{currentSummary.message}"
+                    </p>
+                    <button 
+                      onClick={() => generateSummary()}
+                      className="text-[10px] font-black tracking-widest uppercase text-white/30 hover:text-white transition-colors"
+                      style={{ fontFamily: "'Cinzel Decorative', serif" }}
+                    >
+                      Regenerate Reflection
+                    </button>
+                  </div>
                 )}
               </div>
             </motion.div>

@@ -11,24 +11,31 @@ import { getAuth, signInAnonymously, signInWithCustomToken, onAuthStateChanged, 
 import { getFirestore, doc, setDoc, getDoc, collection, onSnapshot } from 'firebase/firestore';
 
 // --- ROBUST CONFIGURATION LOGIC ---
-const getFirebaseConfig = () => {
+const getEnvConfig = () => {
+  // 1. Try Canvas Environment Global
   if (typeof __firebase_config !== 'undefined' && __firebase_config) {
-    try { return JSON.parse(__firebase_config); } catch (e) { return null; }
+    return {
+      firebase: JSON.parse(__firebase_config),
+      gemini: "" // Provided by Canvas environment at runtime
+    };
   }
   
+  // 2. Try Vite/Vercel Environment Variables
   try {
-    // Standard Vite environment access for Vercel
-    // @ts-ignore
-    const envConfig = import.meta.env?.VITE_FIREBASE_CONFIG;
-    if (envConfig) return JSON.parse(envConfig);
+    const metaEnv = (import.meta as any).env;
+    if (metaEnv) {
+      return {
+        firebase: metaEnv.VITE_FIREBASE_CONFIG ? JSON.parse(metaEnv.VITE_FIREBASE_CONFIG) : null,
+        gemini: metaEnv.VITE_GEMINI_API_KEY || ""
+      };
+    }
   } catch (e) {}
 
-  return null;
+  return { firebase: null, gemini: "" };
 };
 
-const config = getFirebaseConfig();
+const { firebase: config, gemini: geminiApiKey } = getEnvConfig();
 const appId = typeof __app_id !== 'undefined' ? __app_id : 'mood-mirror-prod';
-const apiKey = ""; // System provided
 
 // Initialize services only if config exists
 let auth = null, db = null;
@@ -89,8 +96,8 @@ export default function App() {
         }
       } catch (err) { 
         console.error("Auth error:", err); 
-        // Auto-retry after 3 seconds if connection fails
-        setTimeout(initAuth, 3000);
+        // Auto-retry connection
+        setTimeout(initAuth, 5000);
       }
     };
     initAuth();
@@ -112,20 +119,17 @@ export default function App() {
     return () => unsubscribe();
   }, [user, selectedDate, getDateKey]);
 
-  // --- PROBLEM 2 FIX: CLICKABLE HANDLER ---
+  // --- CLICKABLE HANDLER ---
   const handleSlotClick = useCallback(async (slotId) => {
     const dateKey = getDateKey(selectedDate);
     
-    // 1. Force Local State Update Immediately
-    setCalendarData(prev => {
-      const currentDay = prev[dateKey] || {};
-      return {
-        ...prev,
-        [dateKey]: { ...currentDay, [slotId]: currentMood }
-      };
-    });
+    // Immediate Local Update
+    setCalendarData(prev => ({
+      ...prev,
+      [dateKey]: { ...(prev[dateKey] || {}), [slotId]: currentMood }
+    }));
 
-    // 2. Sync to Cloud
+    // Cloud Sync
     if (user && db) {
       const docRef = doc(db, 'artifacts', appId, 'users', user.uid, 'days', dateKey);
       try {
@@ -135,23 +139,6 @@ export default function App() {
       }
     }
   }, [selectedDate, currentMood, user, getDateKey]);
-
-  // --- CONFIG ERROR PAGE ---
-  if (!config) {
-    return (
-      <div className="min-h-screen bg-slate-900 flex items-center justify-center p-6 text-center">
-        <div className="max-w-md backdrop-blur-xl bg-white/5 p-10 rounded-[3.5rem] border border-white/10 shadow-2xl flex flex-col items-center gap-6">
-          <AlertCircle className="text-rose-500 w-16 h-16" />
-          <h1 className="text-white text-2xl font-black uppercase tracking-widest" style={{ fontFamily: "'Cinzel Decorative', serif" }}>Mirror Missing</h1>
-          <p className="text-slate-400 text-sm leading-relaxed">
-            Your Vercel configuration is missing. <br/>
-            Go to <strong>Vercel Settings {'\u003E'} Environment Variables</strong> and add <strong>VITE_FIREBASE_CONFIG</strong>.
-          </p>
-          <button onClick={() => window.location.reload()} className="px-8 py-3 bg-white text-slate-900 rounded-full text-[10px] font-black uppercase tracking-widest shadow-xl">Retry</button>
-        </div>
-      </div>
-    );
-  }
 
   const changeDate = (offset) => {
     const newDate = new Date(selectedDate);
@@ -163,25 +150,50 @@ export default function App() {
     return date.toLocaleDateString('en-IN', { month: 'short', day: 'numeric', year: 'numeric' }).toUpperCase();
   };
 
+  // --- PROBLEM 2 FIX: SUMMARY GENERATION ---
   const generateSummary = async () => {
     if (!user || isGenerating) return;
     const dateKey = getDateKey(selectedDate);
     const dayData = calendarData[dateKey];
-    if (!dayData) return;
+    
+    const moods = Object.entries(dayData || {})
+      .filter(([k]) => k.startsWith('q'))
+      .map(([k, v]) => `${k}: ${v}`)
+      .join(', ');
+
+    if (!moods) {
+      alert("Please log at least one quadrant before generating a summary.");
+      return;
+    }
+
     setIsGenerating(true);
-    const moods = Object.entries(dayData).filter(([k]) => k.startsWith('q')).map(([k, v]) => `${k}: ${v}`).join(', ');
-    const prompt = `poetic 2-sentence emotional summary for moods: ${moods}. JSON: {"message": "..."}`;
+    const prompt = `Analyze these daily moods: ${moods}. Provide a poetic 2-sentence emotional summary. Response MUST be valid JSON: {"message": "..."}`;
+
     try {
-      const response = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-preview-09-2025:generateContent?key=${apiKey}`, {
+      // Use the key provided by Vercel environment or Canvas
+      const finalApiKey = geminiApiKey || ""; 
+      const response = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-preview-09-2025:generateContent?key=${finalApiKey}`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ contents: [{ parts: [{ text: prompt }] }], generationConfig: { responseMimeType: "application/json" } })
+        body: JSON.stringify({ 
+          contents: [{ parts: [{ text: prompt }] }], 
+          generationConfig: { responseMimeType: "application/json" } 
+        })
       });
+      
+      if (!response.ok) throw new Error("AI API Request Failed");
+      
       const result = await response.json();
       const content = JSON.parse(result.candidates[0].content.parts[0].text);
+      
       const docRef = doc(db, 'artifacts', appId, 'users', user.uid, 'days', dateKey);
       await setDoc(docRef, { ai_summary: content }, { merge: true });
-    } catch (e) { console.error(e); } finally { setIsGenerating(false); }
+    } catch (e) { 
+      console.error("AI Generation Error:", e);
+      alert("Unable to reach the stars right now. Please check your Gemini API Key in Vercel.");
+    } finally { 
+      setIsGenerating(false); 
+    }
   };
 
   const currentSummary = calendarData[getDateKey(selectedDate)]?.ai_summary;
@@ -194,11 +206,26 @@ export default function App() {
   const rotateX = useTransform(springY, [-100, 100], [15, -15]);
   const rotateY = useTransform(springX, [-100, 100], [-15, 15]);
 
+  // Handle missing config diagnostic
+  if (!config) {
+    return (
+      <div className="min-h-screen bg-slate-900 flex items-center justify-center p-6 text-center">
+        <div className="max-w-md backdrop-blur-xl bg-white/5 p-10 rounded-[3rem] border border-white/10 shadow-2xl flex flex-col items-center gap-6">
+          <AlertCircle className="text-rose-500 w-16 h-16" />
+          <h1 className="text-white text-2xl font-black uppercase tracking-widest" style={{ fontFamily: "'Cinzel Decorative', serif" }}>Mirror Offline</h1>
+          <p className="text-slate-400 text-sm leading-relaxed">
+            Firebase config is missing in Vercel environment variables.
+          </p>
+        </div>
+      </div>
+    );
+  }
+
   return (
     <div className={`min-h-screen w-full transition-colors duration-1000 bg-gradient-to-br ${activeTheme.bg} p-4 md:p-8 flex flex-col items-center overflow-x-hidden font-sans`}>
       <style>{`@import url('https://fonts.googleapis.com/css2?family=Cinzel+Decorative:wght@400;700;900&display=swap');`}</style>
       
-      {/* Problem 1 Fix: Status Badge */}
+      {/* Cloud Status */}
       <div className="fixed bottom-4 right-4 z-50">
         <div className={`flex items-center gap-2 px-3 py-1.5 rounded-full backdrop-blur-md border text-[10px] font-bold tracking-widest uppercase transition-all ${user ? 'bg-emerald-500/10 border-emerald-500/30 text-emerald-600' : 'bg-rose-500/10 border-rose-500/30 text-rose-500'}`}>
           <Cloud size={12} className={!user ? 'animate-pulse' : ''} />
@@ -222,7 +249,7 @@ export default function App() {
           {view === 'checkin' ? (
             <motion.div key="checkin" initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, y: -10 }} className="flex flex-col gap-8 pb-12">
               
-              {/* Mirror Area - Z-index lowered to ensure calendar is on top */}
+              {/* Mirror Area */}
               <div ref={constraintsRef} className="z-0 relative backdrop-blur-2xl bg-white/30 p-10 rounded-[4rem] border border-white/40 shadow-xl flex flex-col items-center gap-12 min-h-[500px] overflow-hidden">
                 <div className="text-center pointer-events-none">
                   <h2 className="text-2xl font-bold text-slate-800 mb-1" style={{ fontFamily: "'Cinzel Decorative', serif" }}>Fluid Release</h2>
@@ -249,7 +276,7 @@ export default function App() {
                 </div>
               </div>
 
-              {/* Problem 2 Fix: Temporal Pulse Calendar - High Z-index and clear container */}
+              {/* Temporal Pulse Calendar */}
               <div className="relative z-40 backdrop-blur-xl bg-white/30 p-8 rounded-[3rem] border border-white/40 shadow-sm flex flex-col gap-6">
                 <div className="flex justify-between items-center flex-wrap gap-4">
                   <div className="flex items-center gap-3">
@@ -297,9 +324,16 @@ export default function App() {
             <motion.div key="dashboard" initial={{ opacity: 0 }} animate={{ opacity: 1 }} className="flex flex-col gap-8">
               <div className="backdrop-blur-3xl bg-slate-800/95 text-white p-12 rounded-[4rem] border border-white/10 shadow-2xl text-center">
                 {!currentSummary ? (
-                  <button onClick={generateSummary} disabled={isGenerating} className="px-10 py-4 bg-white text-slate-900 rounded-full font-black text-[10px] uppercase tracking-widest">{isGenerating ? 'Analyzing...' : 'Generate Reflection'}</button>
+                  <button 
+                    onClick={generateSummary} 
+                    disabled={isGenerating} 
+                    className="px-10 py-4 bg-white text-slate-900 rounded-full font-black text-[10px] uppercase tracking-widest flex items-center gap-2 mx-auto"
+                  >
+                    {isGenerating && <Loader2 className="animate-spin" size={14} />}
+                    {isGenerating ? 'Analyzing...' : 'Generate Reflection'}
+                  </button>
                 ) : (
-                  <p className="text-xl md:text-3xl italic">"{currentSummary.message}"</p>
+                  <p className="text-xl md:text-3xl italic leading-relaxed">"{currentSummary.message}"</p>
                 )}
               </div>
             </motion.div>

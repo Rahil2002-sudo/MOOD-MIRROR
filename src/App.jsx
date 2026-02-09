@@ -2,7 +2,7 @@ import React, { useState, useEffect, useRef } from 'react';
 import { motion, AnimatePresence, useMotionValue, useSpring, useTransform } from 'framer-motion';
 import { 
   CloudSun, TrendingUp, Mic, Info, BrainCircuit, Leaf, Wind, Sparkles, 
-  Calendar as CalendarIcon, ChevronLeft, ChevronRight, Clock, Moon, Star, Share2, LogOut, Cloud, Loader2
+  Calendar as CalendarIcon, ChevronLeft, ChevronRight, Clock, Moon, Star, Share2, LogOut, Cloud, Loader2, AlertCircle
 } from 'lucide-react';
 
 // Firebase Imports
@@ -10,33 +10,37 @@ import { initializeApp } from 'firebase/app';
 import { getAuth, signInAnonymously, signInWithCustomToken, onAuthStateChanged, signOut } from 'firebase/auth';
 import { getFirestore, doc, setDoc, getDoc, collection, onSnapshot, query, where, limit } from 'firebase/firestore';
 
-// --- PRODUCTION CONFIG LOGIC ---
+// --- ROBUST CONFIGURATION LOGIC ---
 const getFirebaseConfig = () => {
-  // Priority 1: Check for the special global variable provided in the Canvas environment
+  // Check Canvas Environment
   if (typeof __firebase_config !== 'undefined' && __firebase_config) {
-    return JSON.parse(__firebase_config);
+    try { return JSON.parse(__firebase_config); } catch (e) { return null; }
   }
   
-  // Priority 2: Check for Vite environment variables (for Vercel/Local)
-  // We use a safe check to avoid syntax errors in older environments
+  // Check Vite/Vercel Environment safely
   try {
+    // We use a string-based check to prevent bundler errors
     // @ts-ignore
     const viteConfig = import.meta.env?.VITE_FIREBASE_CONFIG;
     if (viteConfig) return JSON.parse(viteConfig);
   } catch (e) {
-    // Fail gracefully if import.meta is not supported by the bundler
+    // Fallback for older browsers or non-Vite environments
   }
 
-  return {};
+  return null;
 };
 
-const firebaseConfig = getFirebaseConfig();
-const appId = typeof __app_id !== 'undefined' ? __app_id : 'mood-mirror-prod';
-const apiKey = ""; // Provided by execution environment at runtime
+const config = getFirebaseConfig();
+const appId = typeof __app_id !== 'undefined' ? __app_id : 'mood-mirror-app';
+const apiKey = ""; // System provides this at runtime
 
-const app = initializeApp(firebaseConfig);
-const auth = getAuth(app);
-const db = getFirestore(app);
+// Initialize services only if config exists to prevent immediate crash
+let auth, db;
+if (config && config.apiKey) {
+  const app = initializeApp(config);
+  auth = getAuth(app);
+  db = getFirestore(app);
+}
 
 // --- THEME CONSTANTS ---
 const MOOD_THEMES = {
@@ -56,6 +60,7 @@ const TIME_SLOTS = [
 
 export default function App() {
   const [user, setUser] = useState(null);
+  const [isAuthLoading, setIsAuthLoading] = useState(true);
   const [view, setView] = useState('checkin');
   const [currentMood, setCurrentMood] = useState('calm');
   const [selectedDate, setSelectedDate] = useState(new Date()); 
@@ -73,6 +78,10 @@ export default function App() {
 
   // --- AUTHENTICATION ---
   useEffect(() => {
+    if (!auth) {
+      setIsAuthLoading(false);
+      return;
+    }
     const initAuth = async () => {
       try {
         if (typeof __initial_auth_token !== 'undefined' && __initial_auth_token) {
@@ -82,15 +91,17 @@ export default function App() {
         }
       } catch (err) { 
         console.error("Auth error:", err); 
+      } finally {
+        setIsAuthLoading(false);
       }
     };
     initAuth();
-    return onAuthStateChanged(auth, setUser);
+    return onAuthStateChanged(auth, (u) => setUser(u));
   }, []);
 
   // --- DATA SYNC ---
   useEffect(() => {
-    if (!user) return;
+    if (!user || !db) return;
     const dateKey = getDateKey(selectedDate);
     const docRef = doc(db, 'artifacts', appId, 'users', user.uid, 'days', dateKey);
     
@@ -105,8 +116,25 @@ export default function App() {
     return () => unsubscribe();
   }, [user, selectedDate]);
 
+  // --- ERROR SCREEN FOR MISSING CONFIG ---
+  if (!config) {
+    return (
+      <div className="min-h-screen bg-slate-900 flex items-center justify-center p-8 text-center">
+        <div className="max-w-md backdrop-blur-xl bg-white/5 p-10 rounded-[3rem] border border-white/10 shadow-2xl flex flex-col items-center gap-6">
+          <AlertCircle className="text-rose-500 w-16 h-16" />
+          <h1 className="text-white text-2xl font-black uppercase tracking-widest" style={{ fontFamily: "'Cinzel Decorative', serif" }}>Mirror Missing</h1>
+          <p className="text-slate-400 text-sm leading-relaxed">
+            Your Vercel environment variables are missing or incorrect. Please ensure <code className="text-emerald-400">VITE_FIREBASE_CONFIG</code> is set in your Vercel Dashboard.
+          </p>
+          <button onClick={() => window.location.reload()} className="px-8 py-3 bg-white text-slate-900 rounded-full text-xs font-black uppercase tracking-widest">Retry Connection</button>
+        </div>
+      </div>
+    );
+  }
+
+  // --- ACTIONS ---
   const handleSlotClick = async (slotId) => {
-    if (!user) return;
+    if (!user || !db) return;
     const dateKey = getDateKey(selectedDate);
     const docRef = doc(db, 'artifacts', appId, 'users', user.uid, 'days', dateKey);
     try {
@@ -123,11 +151,6 @@ export default function App() {
     setSelectedDate(newDate);
   };
 
-  const formatDisplayDate = (date) => {
-    return date.toLocaleDateString('en-IN', { month: 'short', day: 'numeric', year: 'numeric' }).toUpperCase();
-  };
-
-  // --- AI SUMMARY GENERATION ---
   const generateSummary = async () => {
     if (!user || isGenerating) return;
     const dateKey = getDateKey(selectedDate);
@@ -140,40 +163,39 @@ export default function App() {
       .map(([key, val]) => `${key}: ${val}`)
       .join(', ');
 
-    const prompt = `Analyze these daily moods logged in 4 time quadrants: ${moodsLogged}. 
-    Create a poetic 2-sentence emotional synthesis. Also identify the 'Dominant Tone' (one word) and 'Daily Energy' (percentage). 
-    Respond in JSON: {"message": "...", "dominant": "...", "energy": 85}`;
+    const prompt = `Analyze: ${moodsLogged}. Create poetic summary. JSON: {"message": "...", "dominant": "...", "energy": 85}`;
 
     try {
       const response = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-preview-09-2025:generateContent?key=${apiKey}`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ 
-          contents: [{ parts: [{ text: prompt }] }],
-          generationConfig: { responseMimeType: "application/json" }
-        })
+        body: JSON.stringify({ contents: [{ parts: [{ text: prompt }] }], generationConfig: { responseMimeType: "application/json" } })
       });
       const result = await response.json();
       const content = JSON.parse(result.candidates[0].content.parts[0].text);
-      
       const docRef = doc(db, 'artifacts', appId, 'users', user.uid, 'days', dateKey);
       await setDoc(docRef, { ai_summary: content }, { merge: true });
-    } catch (e) {
-      console.error("AI Error:", e);
-    } finally {
-      setIsGenerating(false);
-    }
+    } catch (e) { console.error(e); } finally { setIsGenerating(false); }
   };
 
   const currentDaySummary = calendarData[getDateKey(selectedDate)]?.ai_summary;
 
-  // --- MOTION VALUES ---
+  // --- MOTION ---
   const x = useMotionValue(0);
   const y = useMotionValue(0);
   const springX = useSpring(x, { stiffness: 300, damping: 30 });
   const springY = useSpring(y, { stiffness: 300, damping: 30 });
   const rotateX = useTransform(springY, [-100, 100], [15, -15]);
   const rotateY = useTransform(springX, [-100, 100], [-15, 15]);
+
+  if (isAuthLoading) {
+    return (
+      <div className="min-h-screen bg-slate-50 flex flex-col items-center justify-center gap-4">
+        <Loader2 className="animate-spin text-slate-400" size={48} />
+        <p className="text-[10px] font-black uppercase tracking-widest text-slate-400" style={{ fontFamily: "'Cinzel Decorative', serif" }}>Loading Mirror...</p>
+      </div>
+    );
+  }
 
   return (
     <div className={`min-h-screen w-full transition-colors duration-1000 bg-gradient-to-br ${activeTheme.bg} p-4 md:p-8 flex flex-col items-center overflow-x-hidden font-sans`}>
@@ -183,19 +205,18 @@ export default function App() {
       <div className="fixed bottom-4 right-4 z-50">
         <div className={`flex items-center gap-2 px-3 py-1.5 rounded-full backdrop-blur-md border text-[10px] font-bold tracking-widest uppercase ${user ? 'bg-emerald-500/10 border-emerald-500/30 text-emerald-600' : 'bg-rose-500/10 border-rose-500/30 text-rose-600 animate-pulse'}`}>
           <Cloud size={12} />
-          {user ? 'Cloud Synced' : 'Connecting...'}
+          {user ? 'Cloud Synced' : 'Syncing...'}
         </div>
       </div>
 
-      {/* Header */}
       <header className="w-full max-w-5xl flex justify-between items-center mb-12 z-10">
         <div className="flex flex-col">
           <h1 className="text-3xl md:text-4xl font-black uppercase tracking-widest text-slate-800" style={{ fontFamily: "'Cinzel Decorative', serif" }}>Mood Mirror</h1>
           <div className="h-1 w-24 bg-slate-800 rounded-full mt-1 opacity-20" />
         </div>
         <nav className="flex gap-2 backdrop-blur-xl bg-white/20 p-1.5 rounded-full border border-white/30 shadow-sm">
-          <button onClick={() => setView('checkin')} className={`px-5 py-2 rounded-full transition-all text-[10px] font-black uppercase tracking-widest ${view === 'checkin' ? 'bg-white shadow-md text-slate-800' : 'text-slate-500'}`} style={{ fontFamily: "'Cinzel Decorative', serif" }}>Reflect</button>
-          <button onClick={() => setView('dashboard')} className={`px-5 py-2 rounded-full transition-all text-[10px] font-black uppercase tracking-widest ${view === 'dashboard' ? 'bg-white shadow-md text-slate-800' : 'text-slate-500'}`} style={{ fontFamily: "'Cinzel Decorative', serif" }}>Insights</button>
+          <button onClick={() => setView('checkin')} className={`px-5 py-2 rounded-full transition-all text-[10px] font-black uppercase tracking-widest ${view === 'checkin' ? 'bg-white shadow-md text-slate-800' : 'text-slate-500 hover:bg-white/30'}`} style={{ fontFamily: "'Cinzel Decorative', serif" }}>Reflect</button>
+          <button onClick={() => setView('dashboard')} className={`px-5 py-2 rounded-full transition-all text-[10px] font-black uppercase tracking-widest ${view === 'dashboard' ? 'bg-white shadow-md text-slate-800' : 'text-slate-500 hover:bg-white/30'}`} style={{ fontFamily: "'Cinzel Decorative', serif" }}>Insights</button>
         </nav>
       </header>
 
@@ -204,7 +225,6 @@ export default function App() {
           {view === 'checkin' ? (
             <motion.div key="checkin" initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, y: -10 }} className="flex flex-col gap-8">
               
-              {/* Fluid Area */}
               <div ref={constraintsRef} className="backdrop-blur-2xl bg-white/30 p-8 md:p-12 rounded-[3.5rem] border border-white/40 shadow-xl flex flex-col items-center gap-10 min-h-[500px] relative overflow-hidden">
                 <div className="text-center z-10 pointer-events-none">
                   <h2 className="text-2xl font-bold text-slate-800 mb-1" style={{ fontFamily: "'Cinzel Decorative', serif" }}>Fluid Release</h2>
@@ -232,7 +252,6 @@ export default function App() {
                 </div>
               </div>
 
-              {/* Pulse Calendar */}
               <div className="backdrop-blur-xl bg-white/30 p-8 rounded-[3rem] border border-white/40 shadow-sm flex flex-col gap-6">
                 <div className="flex justify-between items-center flex-wrap gap-4">
                   <div className="flex items-center gap-3">
@@ -241,7 +260,7 @@ export default function App() {
                   </div>
                   <div className="flex items-center gap-2 bg-white/40 px-3 py-1.5 rounded-full border border-white/50 text-[10px] font-black">
                     <ChevronLeft size={16} className="cursor-pointer" onClick={() => changeDate(-1)} />
-                    <span className="w-28 text-center" style={{ fontFamily: "'Cinzel Decorative', serif" }}>{formatDisplayDate(selectedDate)}</span>
+                    <span className="w-28 text-center" style={{ fontFamily: "'Cinzel Decorative', serif" }}>{selectedDate.toLocaleDateString('en-IN', { month: 'short', day: 'numeric' }).toUpperCase()}</span>
                     <ChevronRight size={16} className="cursor-pointer" onClick={() => changeDate(1)} />
                   </div>
                 </div>
@@ -268,33 +287,15 @@ export default function App() {
                   })}
                 </div>
               </div>
-
-              {/* Voice Journal */}
-              <div className="backdrop-blur-xl bg-white/20 p-8 rounded-[2.5rem] border border-white/30 flex items-center justify-between shadow-sm">
-                <div className="flex gap-6 items-center">
-                  <div className="p-5 rounded-full bg-white/40 text-slate-600">
-                    <Mic size={28} />
-                  </div>
-                  <div>
-                    <h3 className="text-xl font-bold text-slate-800" style={{ fontFamily: "'Cinzel Decorative', serif" }}>Voice Journal</h3>
-                    <p className="text-sm text-slate-600 italic">Capture the deeper nuances of your day.</p>
-                  </div>
-                </div>
-                <button className="px-10 py-4 rounded-full font-black tracking-widest bg-slate-800 text-white hover:bg-slate-700" style={{ fontFamily: "'Cinzel Decorative', serif" }}>Begin Record</button>
-              </div>
             </motion.div>
           ) : (
             <motion.div key="dashboard" initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} className="flex flex-col gap-8">
-              
-              {/* Midnight Synthesis / Summary Card */}
               <div className="backdrop-blur-3xl bg-slate-800/95 text-white p-10 rounded-[4rem] border border-white/10 shadow-2xl relative overflow-hidden flex flex-col items-center text-center">
                 <Moon className="absolute -top-10 -right-10 w-48 h-48 opacity-5 text-white" />
-                
                 {!currentDaySummary ? (
                   <div className="py-12 flex flex-col items-center gap-6 z-10">
                     <Star className="text-amber-400 fill-amber-400" size={32} />
                     <h3 className="text-2xl font-black uppercase tracking-widest" style={{ fontFamily: "'Cinzel Decorative', serif" }}>Daily Synthesis</h3>
-                    <p className="text-slate-400 italic max-w-sm">Log your quadrants to generate your daily emotional summary.</p>
                     <button 
                       onClick={generateSummary}
                       disabled={isGenerating || Object.keys(calendarData[getDateKey(selectedDate)] || {}).length < 1}
@@ -308,7 +309,6 @@ export default function App() {
                 ) : (
                   <div className="flex flex-col items-center gap-8 z-10 w-full">
                     <p className="text-xl md:text-3xl font-medium italic leading-relaxed text-slate-100">"{currentDaySummary.message}"</p>
-                    
                     <div className="grid grid-cols-2 md:grid-cols-3 gap-4 w-full">
                       <div className="bg-white/5 p-6 rounded-3xl border border-white/10 flex flex-col items-center">
                         <span className="text-[10px] font-bold text-emerald-400 uppercase tracking-widest mb-2">Dominant Tone</span>
@@ -323,39 +323,8 @@ export default function App() {
                         <span className="text-xl font-black uppercase tracking-widest" style={{ fontFamily: "'Cinzel Decorative', serif" }}>Harmonious</span>
                       </div>
                     </div>
-
-                    <button 
-                      onClick={() => {
-                        const dateKey = getDateKey(selectedDate);
-                        const docRef = doc(db, 'artifacts', appId, 'users', user.uid, 'days', dateKey);
-                        setDoc(docRef, { ai_summary: null }, { merge: true });
-                      }}
-                      className="text-[10px] font-bold text-slate-500 uppercase tracking-widest hover:text-white"
-                    >
-                      Regenerate
-                    </button>
                   </div>
                 )}
-              </div>
-
-              {/* Insights Grid */}
-              <div className="grid grid-cols-1 md:grid-cols-2 gap-8">
-                <div className="backdrop-blur-xl bg-white/40 p-8 rounded-[3rem] border border-white/50 shadow-lg">
-                   <div className="flex items-center gap-3 mb-6">
-                     <BrainCircuit className="text-emerald-600" />
-                     <h3 className="font-black uppercase tracking-widest text-slate-800" style={{ fontFamily: "'Cinzel Decorative', serif" }}>Chronos Insights</h3>
-                   </div>
-                   <p className="text-sm text-slate-600 italic">Analysis suggests your peak serenity occurs in the morning quadrant.</p>
-                </div>
-                <div className="backdrop-blur-xl bg-white/40 p-8 rounded-[3rem] border border-white/50 shadow-lg">
-                   <div className="flex items-center gap-3 mb-6">
-                     <TrendingUp className="text-sky-600" />
-                     <h3 className="font-black uppercase tracking-widest text-slate-800" style={{ fontFamily: "'Cinzel Decorative', serif" }}>Weekly Horizon</h3>
-                   </div>
-                   <div className="flex items-end justify-between h-24 gap-2">
-                     {[40, 70, 50, 90, 60, 80, 70].map((h, i) => <div key={i} className="flex-1 bg-slate-800/10 rounded-t-lg" style={{ height: `${h}%` }} />)}
-                   </div>
-                </div>
               </div>
             </motion.div>
           )}
@@ -364,7 +333,6 @@ export default function App() {
 
       <footer className="mt-auto py-12 flex gap-8 opacity-20">
          <button onClick={() => signOut(auth)} className="text-[10px] font-bold uppercase tracking-widest">Logout</button>
-         <button className="text-[10px] font-bold uppercase tracking-widest">About Mirror</button>
       </footer>
     </div>
   );

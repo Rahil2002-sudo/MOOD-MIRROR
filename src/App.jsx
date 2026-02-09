@@ -12,20 +12,17 @@ import { getFirestore, doc, setDoc, getDoc, collection, onSnapshot } from 'fireb
 
 // --- ROBUST CONFIGURATION LOGIC ---
 const getEnvConfig = () => {
-  // 1. Try Canvas Environment Global
   if (typeof __firebase_config !== 'undefined' && __firebase_config) {
-    return {
-      firebase: JSON.parse(__firebase_config),
-      gemini: "" // Provided by Canvas environment at runtime
-    };
+    return { firebase: JSON.parse(__firebase_config), gemini: "" };
   }
   
-  // 2. Try Vite/Vercel Environment Variables
   try {
-    const metaEnv = (import.meta as any).env;
-    if (metaEnv) {
+    // Standard Vite environment access for Vercel
+    // @ts-ignore
+    const metaEnv = import.meta.env; 
+    if (metaEnv && metaEnv.VITE_FIREBASE_CONFIG) {
       return {
-        firebase: metaEnv.VITE_FIREBASE_CONFIG ? JSON.parse(metaEnv.VITE_FIREBASE_CONFIG) : null,
+        firebase: JSON.parse(metaEnv.VITE_FIREBASE_CONFIG),
         gemini: metaEnv.VITE_GEMINI_API_KEY || ""
       };
     }
@@ -36,6 +33,7 @@ const getEnvConfig = () => {
 
 const { firebase: config, gemini: geminiApiKey } = getEnvConfig();
 const appId = typeof __app_id !== 'undefined' ? __app_id : 'mood-mirror-prod';
+const apiKey = ""; // System provided
 
 // Initialize services only if config exists
 let auth = null, db = null;
@@ -66,6 +64,7 @@ const TIME_SLOTS = [
 
 export default function App() {
   const [user, setUser] = useState(null);
+  const [authError, setAuthError] = useState(null);
   const [view, setView] = useState('checkin');
   const [currentMood, setCurrentMood] = useState('calm');
   const [selectedDate, setSelectedDate] = useState(new Date()); 
@@ -74,6 +73,14 @@ export default function App() {
 
   const constraintsRef = useRef(null);
   const activeTheme = MOOD_THEMES[currentMood];
+
+  // Motion Values (Fixed ReferenceError)
+  const x = useMotionValue(0);
+  const y = useMotionValue(0);
+  const springX = useSpring(x, { stiffness: 300, damping: 30 });
+  const springY = useSpring(y, { stiffness: 300, damping: 30 });
+  const rotateX = useTransform(springY, [-100, 100], [15, -15]);
+  const rotateY = useTransform(springX, [-100, 100], [-15, 15]);
 
   const currentHour = new Date().getHours();
   const currentSlotId = TIME_SLOTS.find(slot => currentHour >= slot.range[0] && currentHour <= slot.range[1])?.id;
@@ -84,9 +91,12 @@ export default function App() {
     return d.toISOString().split('T')[0];
   }, []);
 
-  // --- PROBLEM 1 FIX: GREEN SYNC LOGIC ---
+  // --- FIX 1: GREEN SYNC & AUTH ERROR DETECTION ---
   useEffect(() => {
-    if (!auth) return;
+    if (!auth) {
+      setAuthError("No config found");
+      return;
+    }
     const initAuth = async () => {
       try {
         if (typeof __initial_auth_token !== 'undefined' && __initial_auth_token) {
@@ -94,10 +104,10 @@ export default function App() {
         } else {
           await signInAnonymously(auth);
         }
+        setAuthError(null);
       } catch (err) { 
-        console.error("Auth error:", err); 
-        // Auto-retry connection
-        setTimeout(initAuth, 5000);
+        setAuthError(err.message);
+        setTimeout(initAuth, 5000); // Retry
       }
     };
     initAuth();
@@ -109,21 +119,17 @@ export default function App() {
     if (!user || !db) return;
     const dateKey = getDateKey(selectedDate);
     const docRef = doc(db, 'artifacts', appId, 'users', user.uid, 'days', dateKey);
-    
     const unsubscribe = onSnapshot(docRef, (docSnap) => {
-      if (docSnap.exists()) {
-        setCalendarData(prev => ({ ...prev, [dateKey]: docSnap.data() }));
-      }
-    }, (err) => console.error("Sync error:", err));
-
+      if (docSnap.exists()) setCalendarData(prev => ({ ...prev, [dateKey]: docSnap.data() }));
+    }, (err) => console.error(err));
     return () => unsubscribe();
   }, [user, selectedDate, getDateKey]);
 
-  // --- CLICKABLE HANDLER ---
+  // --- FIX 2: CLICKABLE PULSE HANDLER ---
   const handleSlotClick = useCallback(async (slotId) => {
     const dateKey = getDateKey(selectedDate);
     
-    // Immediate Local Update
+    // Immediate UI response
     setCalendarData(prev => ({
       ...prev,
       [dateKey]: { ...(prev[dateKey] || {}), [slotId]: currentMood }
@@ -134,11 +140,21 @@ export default function App() {
       const docRef = doc(db, 'artifacts', appId, 'users', user.uid, 'days', dateKey);
       try {
         await setDoc(docRef, { [slotId]: currentMood, updated_at: Date.now() }, { merge: true });
-      } catch (e) { 
-        console.error("Cloud Save Failed:", e); 
-      }
+      } catch (e) { console.error("Save failed", e); }
     }
   }, [selectedDate, currentMood, user, getDateKey]);
+
+  if (!config) {
+    return (
+      <div className="min-h-screen bg-slate-900 flex items-center justify-center p-6 text-center">
+        <div className="max-w-md backdrop-blur-xl bg-white/5 p-10 rounded-[3rem] border border-white/10 shadow-2xl flex flex-col items-center gap-6">
+          <AlertCircle className="text-rose-500 w-16 h-16" />
+          <h1 className="text-white text-2xl font-black uppercase tracking-widest" style={{ fontFamily: "'Cinzel Decorative', serif" }}>Mirror Missing</h1>
+          <p className="text-slate-400 text-sm">Add VITE_FIREBASE_CONFIG to Vercel Settings.</p>
+        </div>
+      </div>
+    );
+  }
 
   const changeDate = (offset) => {
     const newDate = new Date(selectedDate);
@@ -150,87 +166,45 @@ export default function App() {
     return date.toLocaleDateString('en-IN', { month: 'short', day: 'numeric', year: 'numeric' }).toUpperCase();
   };
 
-  // --- PROBLEM 2 FIX: SUMMARY GENERATION ---
   const generateSummary = async () => {
     if (!user || isGenerating) return;
     const dateKey = getDateKey(selectedDate);
     const dayData = calendarData[dateKey];
-    
-    const moods = Object.entries(dayData || {})
-      .filter(([k]) => k.startsWith('q'))
-      .map(([k, v]) => `${k}: ${v}`)
-      .join(', ');
-
-    if (!moods) {
-      alert("Please log at least one quadrant before generating a summary.");
-      return;
-    }
-
+    if (!dayData) return;
     setIsGenerating(true);
-    const prompt = `Analyze these daily moods: ${moods}. Provide a poetic 2-sentence emotional summary. Response MUST be valid JSON: {"message": "..."}`;
-
+    const moods = Object.entries(dayData).filter(([k]) => k.startsWith('q')).map(([k, v]) => `${k}: ${v}`).join(', ');
+    const prompt = `Analyze these daily moods: ${moods}. Provide a short poetic summary of exactly two sentences. Return only JSON: {"message": "Your summary here"}`;
     try {
-      // Use the key provided by Vercel environment or Canvas
-      const finalApiKey = geminiApiKey || ""; 
-      const response = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-preview-09-2025:generateContent?key=${finalApiKey}`, {
+      const finalKey = geminiApiKey || apiKey;
+      const response = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-preview-09-2025:generateContent?key=${finalKey}`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ 
-          contents: [{ parts: [{ text: prompt }] }], 
-          generationConfig: { responseMimeType: "application/json" } 
-        })
+        body: JSON.stringify({ contents: [{ parts: [{ text: prompt }] }], generationConfig: { responseMimeType: "application/json" } })
       });
-      
-      if (!response.ok) throw new Error("AI API Request Failed");
-      
       const result = await response.json();
       const content = JSON.parse(result.candidates[0].content.parts[0].text);
-      
       const docRef = doc(db, 'artifacts', appId, 'users', user.uid, 'days', dateKey);
       await setDoc(docRef, { ai_summary: content }, { merge: true });
-    } catch (e) { 
-      console.error("AI Generation Error:", e);
-      alert("Unable to reach the stars right now. Please check your Gemini API Key in Vercel.");
-    } finally { 
-      setIsGenerating(false); 
-    }
+    } catch (e) { console.error(e); } finally { setIsGenerating(false); }
   };
 
   const currentSummary = calendarData[getDateKey(selectedDate)]?.ai_summary;
-
-  // Motion setup
-  const x = useMotionValue(0);
-  const y = useMotionValue(0);
-  const springX = useSpring(x, { stiffness: 300, damping: 30 });
-  const springY = useSpring(y, { stiffness: 300, damping: 30 });
-  const rotateX = useTransform(springY, [-100, 100], [15, -15]);
-  const rotateY = useTransform(springX, [-100, 100], [-15, 15]);
-
-  // Handle missing config diagnostic
-  if (!config) {
-    return (
-      <div className="min-h-screen bg-slate-900 flex items-center justify-center p-6 text-center">
-        <div className="max-w-md backdrop-blur-xl bg-white/5 p-10 rounded-[3rem] border border-white/10 shadow-2xl flex flex-col items-center gap-6">
-          <AlertCircle className="text-rose-500 w-16 h-16" />
-          <h1 className="text-white text-2xl font-black uppercase tracking-widest" style={{ fontFamily: "'Cinzel Decorative', serif" }}>Mirror Offline</h1>
-          <p className="text-slate-400 text-sm leading-relaxed">
-            Firebase config is missing in Vercel environment variables.
-          </p>
-        </div>
-      </div>
-    );
-  }
 
   return (
     <div className={`min-h-screen w-full transition-colors duration-1000 bg-gradient-to-br ${activeTheme.bg} p-4 md:p-8 flex flex-col items-center overflow-x-hidden font-sans`}>
       <style>{`@import url('https://fonts.googleapis.com/css2?family=Cinzel+Decorative:wght@400;700;900&display=swap');`}</style>
       
-      {/* Cloud Status */}
-      <div className="fixed bottom-4 right-4 z-50">
-        <div className={`flex items-center gap-2 px-3 py-1.5 rounded-full backdrop-blur-md border text-[10px] font-bold tracking-widest uppercase transition-all ${user ? 'bg-emerald-500/10 border-emerald-500/30 text-emerald-600' : 'bg-rose-500/10 border-rose-500/30 text-rose-500'}`}>
+      {/* Sync Status Badge */}
+      <div className="fixed bottom-4 right-4 z-50 group">
+        <div className={`flex items-center gap-2 px-3 py-1.5 rounded-full backdrop-blur-md border text-[9px] font-black uppercase tracking-widest transition-all ${user ? 'bg-emerald-500/10 border-emerald-500/30 text-emerald-600' : 'bg-rose-500/10 border-rose-500/30 text-rose-500'}`}>
           <Cloud size={12} className={!user ? 'animate-pulse' : ''} />
-          {user ? 'Cloud Synced' : 'Offline Mode'}
+          {user ? 'Cloud Synced' : authError ? 'Config Error' : 'Syncing...'}
         </div>
+        {authError && !user && (
+          <div className="absolute bottom-10 right-0 bg-white p-2 rounded shadow text-[8px] text-rose-600 w-48 hidden group-hover:block">
+            {authError}. <br/> Ensure "Anonymous Auth" is enabled in Firebase Console.
+          </div>
+        )}
       </div>
 
       <header className="w-full max-w-5xl flex justify-between items-center mb-12 z-10">
@@ -239,8 +213,8 @@ export default function App() {
           <div className="h-1 w-24 bg-slate-800 rounded-full mt-1 opacity-20" />
         </div>
         <nav className="flex gap-2 backdrop-blur-xl bg-white/20 p-1.5 rounded-full border border-white/30 shadow-sm">
-          <button onClick={() => setView('checkin')} className={`px-6 py-2 rounded-full transition-all text-[10px] font-black uppercase tracking-widest ${view === 'checkin' ? 'bg-white shadow-md text-slate-800' : 'text-slate-500'}`} style={{ fontFamily: "'Cinzel Decorative', serif" }}>Reflect</button>
-          <button onClick={() => setView('dashboard')} className={`px-6 py-2 rounded-full transition-all text-[10px] font-black uppercase tracking-widest ${view === 'dashboard' ? 'bg-white shadow-md text-slate-800' : 'text-slate-500'}`} style={{ fontFamily: "'Cinzel Decorative', serif" }}>Insights</button>
+          <button onClick={() => setView('checkin')} className={`px-6 py-2 rounded-full transition-all text-[10px] font-black uppercase tracking-widest ${view === 'checkin' ? 'bg-white shadow-md text-slate-800' : 'text-slate-500 hover:bg-white/30'}`} style={{ fontFamily: "'Cinzel Decorative', serif" }}>Reflect</button>
+          <button onClick={() => setView('dashboard')} className={`px-6 py-2 rounded-full transition-all text-[10px] font-black uppercase tracking-widest ${view === 'dashboard' ? 'bg-white shadow-md text-slate-800' : 'text-slate-500 hover:bg-white/30'}`} style={{ fontFamily: "'Cinzel Decorative', serif" }}>Insights</button>
         </nav>
       </header>
 
@@ -250,23 +224,23 @@ export default function App() {
             <motion.div key="checkin" initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, y: -10 }} className="flex flex-col gap-8 pb-12">
               
               {/* Mirror Area */}
-              <div ref={constraintsRef} className="z-0 relative backdrop-blur-2xl bg-white/30 p-10 rounded-[4rem] border border-white/40 shadow-xl flex flex-col items-center gap-12 min-h-[500px] overflow-hidden">
-                <div className="text-center pointer-events-none">
+              <div ref={constraintsRef} className="z-10 relative backdrop-blur-2xl bg-white/30 p-10 rounded-[4rem] border border-white/40 shadow-xl flex flex-col items-center gap-12 min-h-[500px] overflow-hidden">
+                <div className="text-center z-20 pointer-events-none">
                   <h2 className="text-2xl font-bold text-slate-800 mb-1" style={{ fontFamily: "'Cinzel Decorative', serif" }}>Fluid Release</h2>
-                  <p className="text-sm text-slate-500 italic">Drag to release. Tap palette to log.</p>
+                  <p className="text-sm text-slate-500 italic">Drag to release tension. Tap palette to log.</p>
                 </div>
                 
                 <div className="relative flex-1 flex items-center justify-center w-full min-h-[250px] pointer-events-none">
                   <motion.div 
                     drag dragConstraints={constraintsRef} dragElastic={0.6} style={{ x, y, rotateX, rotateY }} 
                     onDragEnd={() => { x.set(0); y.set(0); }}
-                    className={`pointer-events-auto z-20 w-56 h-56 shadow-2xl backdrop-blur-3xl transition-colors duration-1000 ${activeTheme.glass} ${activeTheme.glow} border border-white/60 flex items-center justify-center cursor-grab active:cursor-grabbing rounded-full`}
+                    className={`pointer-events-auto z-30 w-56 h-56 shadow-2xl backdrop-blur-3xl transition-colors duration-1000 ${activeTheme.glass} ${activeTheme.glow} border border-white/60 flex items-center justify-center cursor-grab active:cursor-grabbing rounded-full`}
                   >
                     <div className={activeTheme.accent}>{activeTheme.icon}</div>
                   </motion.div>
                 </div>
 
-                <div className="grid grid-cols-5 gap-4 w-full max-w-lg z-10">
+                <div className="grid grid-cols-5 gap-4 w-full max-w-lg z-20">
                   {Object.entries(MOOD_THEMES).map(([key, theme]) => (
                     <button key={key} onClick={() => setCurrentMood(key)} className={`group flex flex-col items-center gap-2 p-2 rounded-3xl transition-all ${currentMood === key ? `bg-white/60 ${theme.glow} scale-110 shadow-lg` : 'hover:bg-white/20'}`}>
                       <div className={`w-10 h-10 rounded-full border-2 border-white ${theme.glass.replace('/20', '')}`} />
@@ -278,14 +252,14 @@ export default function App() {
 
               {/* Temporal Pulse Calendar */}
               <div className="relative z-40 backdrop-blur-xl bg-white/30 p-8 rounded-[3rem] border border-white/40 shadow-sm flex flex-col gap-6">
-                <div className="flex justify-between items-center flex-wrap gap-4">
+                <div className="flex justify-between items-center">
                   <div className="flex items-center gap-3">
                     <CalendarIcon size={20} className="text-slate-700" />
                     <h3 className="text-lg font-bold text-slate-800 uppercase tracking-widest" style={{ fontFamily: "'Cinzel Decorative', serif" }}>Temporal Pulse</h3>
                   </div>
                   <div className="flex items-center gap-2 bg-white/40 px-4 py-1.5 rounded-full border border-white/50 text-[10px] font-black">
                     <ChevronLeft size={16} className="cursor-pointer" onClick={() => changeDate(-1)} />
-                    <span className="w-28 text-center" style={{ fontFamily: "'Cinzel Decorative', serif" }}>{formatDisplayDate(selectedDate)}</span>
+                    <span className="w-28 text-center">{selectedDate.toLocaleDateString('en-IN', { month: 'short', day: 'numeric' }).toUpperCase()}</span>
                     <ChevronRight size={16} className="cursor-pointer" onClick={() => changeDate(1)} />
                   </div>
                 </div>
@@ -296,12 +270,11 @@ export default function App() {
                     return (
                       <button 
                         key={slot.id} 
-                        type="button"
                         onClick={() => handleSlotClick(slot.id)} 
-                        className={`pointer-events-auto relative p-4 rounded-[2rem] border transition-all flex flex-col items-center gap-2 
+                        className={`pointer-events-auto relative p-4 rounded-[2rem] border transition-all flex flex-col items-center gap-2 min-h-[100px] 
                           ${moodAtSlot ? `${slotTheme.glass} border-white/50 ${slotTheme.glow}` : 'bg-white/10 border-white/20 hover:bg-white/40'}`}
                       >
-                        <span className="text-[8px] font-black uppercase tracking-widest text-slate-400" style={{ fontFamily: "'Cinzel Decorative', serif" }}>{slot.period}</span>
+                        <span className="text-[8px] font-black uppercase tracking-widest text-slate-400">{slot.period}</span>
                         <div className="h-8 flex items-center justify-center pointer-events-none">
                           {moodAtSlot && <div className={slotTheme.accent}>{slotTheme.icon}</div>}
                         </div>
@@ -311,35 +284,37 @@ export default function App() {
                   })}
                 </div>
               </div>
-
-              <div className="backdrop-blur-xl bg-white/20 p-8 rounded-[2.5rem] border border-white/30 flex items-center justify-between shadow-sm">
-                <div className="flex gap-6 items-center">
-                  <div className="p-5 rounded-full bg-white/40 text-slate-600"><Mic size={28} /></div>
-                  <h3 className="text-xl font-bold text-slate-800" style={{ fontFamily: "'Cinzel Decorative', serif" }}>Voice Journal</h3>
-                </div>
-                <button className="px-10 py-4 rounded-full font-black tracking-widest bg-slate-800 text-white hover:bg-slate-700" style={{ fontFamily: "'Cinzel Decorative', serif" }}>Record</button>
-              </div>
             </motion.div>
           ) : (
             <motion.div key="dashboard" initial={{ opacity: 0 }} animate={{ opacity: 1 }} className="flex flex-col gap-8">
               <div className="backdrop-blur-3xl bg-slate-800/95 text-white p-12 rounded-[4rem] border border-white/10 shadow-2xl text-center">
                 {!currentSummary ? (
-                  <button 
-                    onClick={generateSummary} 
-                    disabled={isGenerating} 
-                    className="px-10 py-4 bg-white text-slate-900 rounded-full font-black text-[10px] uppercase tracking-widest flex items-center gap-2 mx-auto"
-                  >
-                    {isGenerating && <Loader2 className="animate-spin" size={14} />}
-                    {isGenerating ? 'Analyzing...' : 'Generate Reflection'}
-                  </button>
+                  <div className="flex flex-col items-center gap-6">
+                    <p className="text-xl italic opacity-50">Log your day to generate synthesis.</p>
+                    <button onClick={generateSummary} disabled={isGenerating} className="px-10 py-4 bg-white text-slate-900 rounded-full font-black text-[10px] uppercase tracking-widest disabled:opacity-50">
+                      {isGenerating ? <Loader2 className="animate-spin" /> : 'Generate Synthesis'}
+                    </button>
+                  </div>
                 ) : (
-                  <p className="text-xl md:text-3xl italic leading-relaxed">"{currentSummary.message}"</p>
+                  <p className="text-xl md:text-3xl italic leading-relaxed">
+                    {typeof currentSummary.message === 'string' ? `"${currentSummary.message}"` : 'Synthesis complete. Reflect on your journey.'}
+                  </p>
                 )}
               </div>
             </motion.div>
           )}
         </AnimatePresence>
       </main>
+
+      <style dangerouslySetInnerHTML={{ __html: `
+        @keyframes blob-slow {
+          0% { transform: rotate(0deg) scale(1); border-radius: 42% 58% 70% 30% / 45% 45% 55% 55%; }
+          33% { transform: rotate(120deg) scale(1.05); border-radius: 50% 50% 33% 67% / 55% 27% 73% 45%; }
+          66% { transform: rotate(240deg) scale(0.95); border-radius: 33% 67% 58% 42% / 63% 30% 70% 37%; }
+          100% { transform: rotate(360deg) scale(1); border-radius: 42% 58% 70% 30% / 45% 45% 55% 55%; }
+        }
+        .animate-blob-slow { animation: blob-slow 20s infinite linear; }
+      `}} />
     </div>
   );
 }

@@ -1,14 +1,14 @@
-import React, { useState, useEffect, useRef, useCallback } from 'react';
+import React, { useState, useEffect, useRef, useCallback, useMemo } from 'react';
 import { motion, AnimatePresence, useMotionValue, useSpring, useTransform } from 'framer-motion';
 import { 
   CloudSun, TrendingUp, Mic, Info, BrainCircuit, Leaf, Wind, Sparkles, 
-  Calendar as CalendarIcon, ChevronLeft, ChevronRight, Clock, Moon, Star, Share2, LogOut, Cloud, Loader2, AlertCircle
+  Calendar as CalendarIcon, ChevronLeft, ChevronRight, Clock, Moon, Star, Share2, LogOut, Cloud, Loader2, AlertCircle, X, Bell
 } from 'lucide-react';
 
 // Firebase Imports
 import { initializeApp } from 'firebase/app';
 import { getAuth, signInAnonymously, signInWithCustomToken, onAuthStateChanged, signOut } from 'firebase/auth';
-import { getFirestore, doc, setDoc, getDoc, collection, onSnapshot } from 'firebase/firestore';
+import { getFirestore, doc, setDoc, getDoc, collection, onSnapshot, query, limit, orderBy } from 'firebase/firestore';
 
 // --- ROBUST CONFIGURATION LOGIC ---
 const getEnvConfig = () => {
@@ -111,9 +111,11 @@ export default function App() {
   const [user, setUser] = useState(null);
   const [authError, setAuthError] = useState(null);
   const [view, setView] = useState('checkin');
+  const [isCalendarOpen, setIsCalendarOpen] = useState(false);
   const [currentMood, setCurrentMood] = useState('calm');
   const [selectedDate, setSelectedDate] = useState(new Date()); 
   const [calendarData, setCalendarData] = useState({});
+  const [weeklyReport, setWeeklyReport] = useState(null);
   const [isGenerating, setIsGenerating] = useState(false);
 
   const constraintsRef = useRef(null);
@@ -136,6 +138,21 @@ export default function App() {
     return d.toISOString().split('T')[0];
   }, []);
 
+  // --- LOGIC: PROBABILITY CALCULATION FOR DAILY AURA ---
+  const getDominantMoodOfDay = useCallback((dayData) => {
+    if (!dayData) return null;
+    const moods = [dayData.q1, dayData.q2, dayData.q3, dayData.q4].filter(Boolean);
+    if (moods.length === 0) return null;
+    
+    const freq = moods.reduce((acc, m) => { acc[m] = (acc[m] || 0) + 1; return acc; }, {});
+    // If a mood appears 3+ times (75% probability), it overrides as the dominant aura
+    const probabilityWinner = Object.keys(freq).find(k => freq[k] >= 3);
+    if (probabilityWinner) return probabilityWinner;
+
+    // Otherwise, standard highest frequency
+    return Object.keys(freq).reduce((a, b) => freq[a] > freq[b] ? a : b);
+  }, []);
+
   // Sync Logic
   useEffect(() => {
     if (!auth) return;
@@ -156,15 +173,17 @@ export default function App() {
     return onAuthStateChanged(auth, setUser);
   }, []);
 
+  // Fetch all user days for the calendar view
   useEffect(() => {
     if (!user || !db) return;
-    const dateKey = getDateKey(selectedDate);
-    const docRef = doc(db, 'artifacts', appId, 'users', user.uid, 'days', dateKey);
-    const unsubscribe = onSnapshot(docRef, (docSnap) => {
-      if (docSnap.exists()) setCalendarData(prev => ({ ...prev, [dateKey]: docSnap.data() }));
+    const colRef = collection(db, 'artifacts', appId, 'users', user.uid, 'days');
+    const unsubscribe = onSnapshot(colRef, (snapshot) => {
+      const data = {};
+      snapshot.forEach(docSnap => { data[docSnap.id] = docSnap.data(); });
+      setCalendarData(data);
     }, (err) => console.error(err));
     return () => unsubscribe();
-  }, [user, selectedDate, getDateKey]);
+  }, [user]);
 
   const handleSlotClick = useCallback(async (slotId) => {
     const dateKey = getDateKey(selectedDate);
@@ -180,6 +199,66 @@ export default function App() {
       } catch (e) { console.error("Save failed", e); }
     }
   }, [selectedDate, currentMood, user, getDateKey]);
+
+  // --- WEEKLY ANALYSIS ENGINE (Gemini) ---
+  const generateWeeklyAlert = async () => {
+    if (!user || isGenerating) return;
+    setIsGenerating(true);
+    
+    // Aggregate last 7 days of dominant moods
+    const last7 = [];
+    for(let i=0; i<7; i++) {
+      const d = new Date();
+      d.setDate(d.getDate() - i);
+      const mood = getDominantMoodOfDay(calendarData[getDateKey(d)]);
+      if(mood) last7.push(mood);
+    }
+
+    if (last7.length < 3) {
+      setWeeklyReport({ message: "Mirrors require 3 cycles of depth to project your weekly mental horizon.", alert: false, status: "Analyzing Trend" });
+      setIsGenerating(false);
+      return;
+    }
+
+    const prompt = `Act as a clinical innovator. Analyze this 7-day mood sequence: ${last7.join(', ')}. 
+    If you see 3+ days of stress or anxiety, provide a 'Vulnerability Alert'. If mostly joy/calm, provide a 'Stability Affirmation'. 
+    Respond strictly in JSON: {"message": "Poetic 2-sentence summary", "status": "Stable/Vulnerable", "alert": true/false}`;
+
+    try {
+      const finalKey = geminiApiKey || "";
+      const response = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-preview-09-2025:generateContent?key=${finalKey}`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ contents: [{ parts: [{ text: prompt }] }], generationConfig: { responseMimeType: "application/json" } })
+      });
+      const result = await response.json();
+      setWeeklyReport(JSON.parse(result.candidates[0].content.parts[0].text));
+    } catch (e) { console.error(e); } finally { setIsGenerating(false); }
+  };
+
+  // Calendar Engine Grid
+  const calendarDays = useMemo(() => {
+    const days = [];
+    const now = new Date();
+    const firstDay = new Date(now.getFullYear(), now.getMonth(), 1);
+    const lastDay = new Date(now.getFullYear(), now.getMonth() + 1, 0);
+    
+    // Pad first week
+    const startPadding = firstDay.getDay();
+    for (let i = 0; i < startPadding; i++) days.push({ empty: true, key: `empty-${i}` });
+
+    for (let i = 1; i <= lastDay.getDate(); i++) {
+      const d = new Date(now.getFullYear(), now.getMonth(), i);
+      const key = getDateKey(d);
+      days.push({ 
+        day: i, 
+        key, 
+        mood: getDominantMoodOfDay(calendarData[key]),
+        isToday: key === getDateKey(new Date())
+      });
+    }
+    return days;
+  }, [calendarData, getDateKey, getDominantMoodOfDay]);
 
   if (!config) {
     return (
@@ -208,7 +287,7 @@ export default function App() {
     const moods = Object.entries(dayData).filter(([k]) => k.startsWith('q')).map(([k, v]) => `${k}: ${v}`).join(', ');
     const prompt = `Analyze: ${moods}. 2-sentence poetic summary. JSON: {"message": "..."}`;
     try {
-      const finalKey = geminiApiKey || apiKey;
+      const finalKey = geminiApiKey || "";
       const response = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-preview-09-2025:generateContent?key=${finalKey}`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -227,18 +306,20 @@ export default function App() {
     <div className={`min-h-screen w-full transition-colors duration-1000 bg-gradient-to-br ${activeTheme.bg} p-4 md:p-8 flex flex-col items-center overflow-x-hidden font-sans`}>
       <style>{`@import url('https://fonts.googleapis.com/css2?family=Cinzel+Decorative:wght@400;700;900&display=swap');`}</style>
       
+      {/* Top Right Calendar Toggle */}
+      <button 
+        onClick={() => { setIsCalendarOpen(true); generateWeeklyAlert(); }}
+        className="fixed top-6 right-6 z-[100] p-4 rounded-full backdrop-blur-xl bg-white/30 border border-white/40 shadow-lg text-slate-800 hover:scale-110 active:scale-95 transition-transform"
+      >
+        <CalendarIcon size={24} />
+      </button>
+
       {/* Sync Status Badge */}
       <div className="fixed bottom-4 right-4 z-[100] group">
         <div className={`flex items-center gap-2 px-3 py-1.5 rounded-full backdrop-blur-md border text-[9px] font-black uppercase tracking-widest transition-all ${user ? 'bg-emerald-500/10 border-emerald-500/30 text-emerald-600' : 'bg-rose-500/10 border-rose-500/30 text-rose-500'}`}>
           <Cloud size={12} className={!user ? 'animate-pulse' : ''} />
           {user ? 'Cloud Synced' : authError ? 'Config Error' : 'Syncing...'}
         </div>
-        {authError && !user && (
-          <div className="absolute bottom-10 right-0 bg-white p-3 rounded-2xl shadow-xl text-[10px] text-rose-600 w-56 hidden group-hover:block z-[110] border border-rose-100">
-            <p className="font-bold mb-1">Connection Blocked</p>
-            <p className="opacity-80">Enable 'Anonymous Auth' in Firebase Console & ensure your config is valid JSON.</p>
-          </div>
-        )}
       </div>
 
       <header className="w-full max-w-5xl flex flex-col md:flex-row justify-between items-center mb-8 md:mb-12 z-20 gap-4">
@@ -261,7 +342,7 @@ export default function App() {
               <div ref={constraintsRef} className="z-10 relative backdrop-blur-2xl bg-white/30 p-6 md:p-10 rounded-[2.5rem] md:rounded-[4rem] border border-white/40 shadow-xl flex flex-col items-center gap-8 md:gap-12 min-h-[400px] md:min-h-[500px] overflow-hidden">
                 <div className="text-center z-20">
                   <h2 className="text-lg md:text-2xl font-bold text-slate-800 mb-1" style={{ fontFamily: "'Cinzel Decorative', serif" }}>Fluid Release</h2>
-                  <p className="text-xs md:text-sm text-slate-500 italic">Drag to release. Tap palette to log.</p>
+                  <p className="text-xs md:text-sm text-slate-500 italic">Drag to release tension. Tap palette to log.</p>
                 </div>
                 
                 <div className="relative flex-1 flex items-center justify-center w-full min-h-[200px] pointer-events-none">
@@ -274,7 +355,7 @@ export default function App() {
                   </motion.div>
                 </div>
 
-                {/* Palette with Explicit Icons and Fixed Colors */}
+                {/* Palette */}
                 <div className="grid grid-cols-5 gap-3 md:gap-6 w-full max-w-lg z-20">
                   {Object.entries(MOOD_THEMES).map(([key, theme]) => (
                     <button 
@@ -283,8 +364,7 @@ export default function App() {
                       className={`group flex flex-col items-center gap-2 p-1.5 rounded-3xl transition-all ${currentMood === key ? `bg-white/60 ${theme.glow} scale-110 shadow-lg` : 'hover:bg-white/20'}`}
                     >
                       <div 
-                        className={`w-10 h-10 md:w-12 md:h-12 rounded-full border-2 border-white flex items-center justify-center p-2.5 transition-all
-                          ${currentMood === key ? 'opacity-100' : 'opacity-60'}`}
+                        className={`w-10 h-10 md:w-12 md:h-12 rounded-full border-2 border-white flex items-center justify-center p-2.5 transition-all`}
                         style={{ backgroundColor: theme.solid }}
                       >
                         <div className="text-white w-full h-full">{theme.icon}</div>
@@ -295,7 +375,7 @@ export default function App() {
                 </div>
               </div>
 
-              {/* Temporal Pulse Calendar - FIXED CLICKABILITY & RESPONSIVENESS */}
+              {/* Temporal Pulse Calendar */}
               <div className="relative z-[60] backdrop-blur-xl bg-white/40 p-6 md:p-8 rounded-[2.5rem] md:rounded-[3rem] border border-white/60 shadow-lg flex flex-col gap-6">
                 <div className="flex flex-col sm:flex-row justify-between items-center gap-4">
                   <div className="flex items-center gap-3">
@@ -303,27 +383,24 @@ export default function App() {
                     <h3 className="text-md md:text-lg font-bold text-slate-800 uppercase tracking-widest" style={{ fontFamily: "'Cinzel Decorative', serif" }}>Temporal Pulse</h3>
                   </div>
                   <div className="flex items-center gap-2 bg-white/60 px-4 py-1.5 rounded-full border border-white/80 text-[9px] md:text-[10px] font-black shadow-sm">
-                    <ChevronLeft size={14} className="cursor-pointer hover:text-slate-400" onClick={() => changeDate(-1)} />
+                    <button onClick={() => changeDate(-1)} className="hover:text-slate-400 transition-colors"><ChevronLeft size={14} /></button>
                     <span className="w-24 md:w-28 text-center">{selectedDate.toLocaleDateString('en-IN', { month: 'short', day: 'numeric' }).toUpperCase()}</span>
-                    <ChevronRight size={14} className="cursor-pointer hover:text-slate-400" onClick={() => changeDate(1)} />
+                    <button onClick={() => changeDate(1)} className="hover:text-slate-400 transition-colors"><ChevronRight size={14} /></button>
                   </div>
                 </div>
                 <div className="grid grid-cols-2 lg:grid-cols-4 gap-3 md:gap-4">
                   {TIME_SLOTS.map((slot) => {
                     const moodId = calendarData[getDateKey(selectedDate)]?.[slot.id];
                     const moodTheme = moodId ? MOOD_THEMES[moodId] : null;
-                    const isCurrent = getDateKey(selectedDate) === getDateKey(new Date()) && slot.id === currentSlotId;
-
                     return (
                       <button 
                         key={slot.id} 
                         type="button"
                         onClick={() => handleSlotClick(slot.id)} 
                         className={`pointer-events-auto relative p-4 rounded-[1.8rem] md:rounded-[2.2rem] border transition-all flex flex-col items-center gap-2 min-h-[90px] md:min-h-[110px] 
-                          ${moodId ? `${moodTheme.glass} border-white/80 ${moodTheme.glow}` : 'bg-white/20 border-white/30 hover:bg-white/60'}
-                          ${isCurrent ? 'ring-2 ring-slate-800/20' : ''}`}
+                          ${moodId ? `${moodTheme.glass} border-white/80 ${moodTheme.glow}` : 'bg-white/10 border-white/20 hover:bg-white/40'}`}
                       >
-                        <span className="text-[7px] md:text-[8px] font-black uppercase tracking-widest text-slate-500">{slot.period}</span>
+                        <span className="text-[7px] md:text-[8px] font-black uppercase tracking-widest text-slate-400">{slot.period}</span>
                         <div className="h-8 md:h-10 flex items-center justify-center pointer-events-none">
                           {moodId ? (
                             <div className={`${moodTheme.accent} w-6 h-6 md:w-8 md:h-8`}>{moodTheme.icon}</div>
@@ -383,6 +460,63 @@ export default function App() {
           )}
         </AnimatePresence>
       </main>
+
+      {/* FULL SCREEN CALENDAR MODAL */}
+      <AnimatePresence>
+        {isCalendarOpen && (
+          <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} className="fixed inset-0 z-[200] bg-slate-100/95 backdrop-blur-3xl flex items-center justify-center p-4 md:p-10 overflow-y-auto">
+            <div className="w-full max-w-4xl flex flex-col gap-8 text-slate-800">
+              <div className="flex justify-between items-center">
+                <h2 className="text-2xl md:text-4xl font-black uppercase tracking-[0.3em]" style={{ fontFamily: "'Cinzel Decorative', serif" }}>Mirror Horizon</h2>
+                <button onClick={() => setIsCalendarOpen(false)} className="p-3 bg-slate-200 rounded-full hover:bg-slate-300 transition-colors"><X size={28} /></button>
+              </div>
+
+              {/* Weekly Mental Health Alert */}
+              <div className={`p-8 rounded-[3rem] border transition-all duration-1000 ${weeklyReport?.alert ? 'bg-rose-500/10 border-rose-500/30' : 'bg-white border-slate-200 shadow-xl'}`}>
+                <div className="flex flex-col md:flex-row gap-6 items-center text-center md:text-left">
+                   <div className={`p-5 rounded-[1.5rem] ${weeklyReport?.alert ? 'bg-rose-500 shadow-lg shadow-rose-500/20' : 'bg-emerald-500 shadow-lg shadow-emerald-500/20'} text-white`}>
+                     {isGenerating ? <Loader2 className="animate-spin" size={32} /> : (weeklyReport?.alert ? <Bell size={32} /> : <Sparkles size={32} />)}
+                   </div>
+                   <div className="flex-1">
+                     <h3 className="text-xl font-black uppercase mb-1 tracking-widest" style={{ fontFamily: "'Cinzel Decorative', serif" }}>{isGenerating ? 'Consulting Internal Rhythms...' : (weeklyReport?.status || 'Analyzing Trend')}</h3>
+                     <p className="text-slate-600 italic text-sm md:text-base leading-relaxed">{weeklyReport?.message || "Synthesizing your temporal sequences across the horizon..."}</p>
+                   </div>
+                </div>
+              </div>
+
+              {/* Calendar Grid */}
+              <div className="bg-white p-6 md:p-10 rounded-[3rem] border border-slate-200 shadow-2xl">
+                <div className="grid grid-cols-7 gap-2 md:gap-4 mb-8">
+                  {['Sun','Mon','Tue','Wed','Thu','Fri','Sat'].map((d, i) => <div key={i} className="text-center text-[10px] font-black text-slate-400 uppercase" style={{ fontFamily: "'Cinzel Decorative', serif" }}>{d[0]}</div>)}
+                </div>
+                <div className="grid grid-cols-7 gap-2 md:gap-4">
+                  {calendarDays.map((item, idx) => (
+                    <div key={idx} className="flex flex-col items-center">
+                      {!item.empty ? (
+                        <div className={`w-full aspect-square rounded-[1rem] md:rounded-[1.5rem] border flex flex-col items-center justify-center relative transition-all duration-1000
+                          ${item.mood ? `${MOOD_THEMES[item.mood].glass} border-white shadow-sm ${MOOD_THEMES[item.mood].glow}` : 'bg-slate-50 border-slate-100'}
+                          ${item.isToday ? 'ring-2 ring-indigo-500 shadow-lg' : ''}`}
+                        >
+                          {item.mood && (
+                            <div className={`${MOOD_THEMES[item.mood].accent} w-5 h-5 md:w-7 md:h-7 mb-1`}>{MOOD_THEMES[item.mood].icon}</div>
+                          )}
+                          <span className={`text-[9px] md:text-[11px] font-black ${item.mood ? 'text-slate-800' : 'text-slate-300'}`}>
+                            {item.day}
+                          </span>
+                        </div>
+                      ) : <div className="w-full aspect-square" />}
+                    </div>
+                  ))}
+                </div>
+              </div>
+
+              <div className="text-center">
+                <p className="text-[10px] font-black text-slate-400 uppercase tracking-[0.4em]">Closed Daily @ 01:00 AM • Neural Sync Active</p>
+              </div>
+            </div>
+          </motion.div>
+        )}
+      </AnimatePresence>
 
       <style dangerouslySetInnerHTML={{ __html: `
         @keyframes blob-slow {

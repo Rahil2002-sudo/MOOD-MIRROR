@@ -17,7 +17,6 @@ const getEnvConfig = () => {
   }
   
   try {
-    // Standard Vite environment access for Vercel
     // @ts-ignore
     const metaEnv = import.meta.env; 
     if (metaEnv && metaEnv.VITE_FIREBASE_CONFIG) {
@@ -48,11 +47,11 @@ if (config && config.apiKey) {
 }
 
 const MOOD_THEMES = {
-  joy: { glass: 'bg-emerald-400/20', accent: 'text-emerald-700', bg: 'from-emerald-100 to-teal-50', blob: 'bg-emerald-300', glow: 'shadow-[0_0_35px_rgba(16,185,129,0.5)]', text: 'Growth & Joy', icon: <Leaf className="w-8 h-8" /> },
-  anxiety: { glass: 'bg-amber-400/20', accent: 'text-amber-700', bg: 'from-orange-50 to-amber-100', blob: 'bg-amber-300', glow: 'shadow-[0_0_35px_rgba(245,158,11,0.5)]', text: 'Restless', icon: <Wind className="w-8 h-8" /> },
-  stress: { glass: 'bg-rose-400/20', accent: 'text-rose-700', bg: 'from-rose-50 to-slate-100', blob: 'bg-rose-300', glow: 'shadow-[0_0_35px_rgba(225,29,72,0.5)]', text: 'High Intensity', icon: <Sparkles className="w-8 h-8" /> },
-  calm: { glass: 'bg-sky-400/20', accent: 'text-sky-700', bg: 'from-sky-100 to-indigo-50', blob: 'bg-sky-300', glow: 'shadow-[0_0_35px_rgba(14,165,233,0.5)]', text: 'Deep Peace', icon: <CloudSun className="w-8 h-8" /> },
-  low: { glass: 'bg-indigo-400/20', accent: 'text-indigo-800', bg: 'from-slate-200 to-indigo-100', blob: 'bg-indigo-300', glow: 'shadow-[0_0_35px_rgba(99,102,241,0.5)]', text: 'Stillness', icon: <Sparkles className="w-8 h-8" /> }
+  joy: { glass: 'bg-emerald-400/20', accent: 'text-emerald-700', bg: 'from-emerald-100 to-teal-50', blob: 'bg-emerald-300', glow: 'shadow-[0_0_35px_rgba(16,185,129,0.5)]', text: 'Growth & Joy', icon: <Leaf className="w-6 h-6 md:w-8 md:h-8" /> },
+  anxiety: { glass: 'bg-amber-400/20', accent: 'text-amber-700', bg: 'from-orange-50 to-amber-100', blob: 'bg-amber-300', glow: 'shadow-[0_0_35px_rgba(245,158,11,0.5)]', text: 'Restless', icon: <Wind className="w-6 h-6 md:w-8 md:h-8" /> },
+  stress: { glass: 'bg-rose-400/20', accent: 'text-rose-700', bg: 'from-rose-50 to-slate-100', blob: 'bg-rose-300', glow: 'shadow-[0_0_35px_rgba(225,29,72,0.5)]', text: 'High Intensity', icon: <Sparkles className="w-6 h-6 md:w-8 md:h-8" /> },
+  calm: { glass: 'bg-sky-400/20', accent: 'text-sky-700', bg: 'from-sky-100 to-indigo-50', blob: 'bg-sky-300', glow: 'shadow-[0_0_35px_rgba(14,165,233,0.5)]', text: 'Deep Peace', icon: <CloudSun className="w-6 h-6 md:w-8 md:h-8" /> },
+  low: { glass: 'bg-indigo-400/20', accent: 'text-indigo-800', bg: 'from-slate-200 to-indigo-100', blob: 'bg-indigo-300', glow: 'shadow-[0_0_35px_rgba(99,102,241,0.5)]', text: 'Stillness', icon: <Sparkles className="w-6 h-6 md:w-8 md:h-8" /> }
 };
 
 const TIME_SLOTS = [
@@ -74,7 +73,7 @@ export default function App() {
   const constraintsRef = useRef(null);
   const activeTheme = MOOD_THEMES[currentMood];
 
-  // Motion Values (Fixed ReferenceError)
+  // Motion Values
   const x = useMotionValue(0);
   const y = useMotionValue(0);
   const springX = useSpring(x, { stiffness: 300, damping: 30 });
@@ -91,7 +90,6 @@ export default function App() {
     return d.toISOString().split('T')[0];
   }, []);
 
-  // --- FIX 1: GREEN SYNC & AUTH ERROR DETECTION ---
   useEffect(() => {
     if (!auth) {
       setAuthError("No config found");
@@ -107,14 +105,13 @@ export default function App() {
         setAuthError(null);
       } catch (err) { 
         setAuthError(err.message);
-        setTimeout(initAuth, 5000); // Retry
+        setTimeout(initAuth, 5000); 
       }
     };
     initAuth();
     return onAuthStateChanged(auth, setUser);
   }, []);
 
-  // --- DATA SYNC ---
   useEffect(() => {
     if (!user || !db) return;
     const dateKey = getDateKey(selectedDate);
@@ -125,17 +122,13 @@ export default function App() {
     return () => unsubscribe();
   }, [user, selectedDate, getDateKey]);
 
-  // --- FIX 2: CLICKABLE PULSE HANDLER ---
   const handleSlotClick = useCallback(async (slotId) => {
     const dateKey = getDateKey(selectedDate);
-    
-    // Immediate UI response
     setCalendarData(prev => ({
       ...prev,
       [dateKey]: { ...(prev[dateKey] || {}), [slotId]: currentMood }
     }));
 
-    // Cloud Sync
     if (user && db) {
       const docRef = doc(db, 'artifacts', appId, 'users', user.uid, 'days', dateKey);
       try {
@@ -200,70 +193,65 @@ export default function App() {
           <Cloud size={12} className={!user ? 'animate-pulse' : ''} />
           {user ? 'Cloud Synced' : authError ? 'Config Error' : 'Syncing...'}
         </div>
-        {authError && !user && (
-          <div className="absolute bottom-10 right-0 bg-white p-2 rounded shadow text-[8px] text-rose-600 w-48 hidden group-hover:block">
-            {authError}. <br/> Ensure "Anonymous Auth" is enabled in Firebase Console.
-          </div>
-        )}
       </div>
 
-      <header className="w-full max-w-5xl flex justify-between items-center mb-12 z-10">
-        <div className="flex flex-col">
-          <h1 className="text-3xl md:text-4xl font-black uppercase tracking-widest text-slate-800" style={{ fontFamily: "'Cinzel Decorative', serif" }}>Mood Mirror</h1>
-          <div className="h-1 w-24 bg-slate-800 rounded-full mt-1 opacity-20" />
+      <header className="w-full max-w-5xl flex flex-col md:flex-row justify-between items-center mb-8 md:mb-12 z-10 gap-4">
+        <div className="flex flex-col items-center md:items-start">
+          <h1 className="text-2xl md:text-4xl font-black uppercase tracking-widest text-slate-800" style={{ fontFamily: "'Cinzel Decorative', serif" }}>Mood Mirror</h1>
+          <div className="h-1 w-16 md:w-24 bg-slate-800 rounded-full mt-1 opacity-20 hidden md:block" />
         </div>
         <nav className="flex gap-2 backdrop-blur-xl bg-white/20 p-1.5 rounded-full border border-white/30 shadow-sm">
-          <button onClick={() => setView('checkin')} className={`px-6 py-2 rounded-full transition-all text-[10px] font-black uppercase tracking-widest ${view === 'checkin' ? 'bg-white shadow-md text-slate-800' : 'text-slate-500 hover:bg-white/30'}`} style={{ fontFamily: "'Cinzel Decorative', serif" }}>Reflect</button>
-          <button onClick={() => setView('dashboard')} className={`px-6 py-2 rounded-full transition-all text-[10px] font-black uppercase tracking-widest ${view === 'dashboard' ? 'bg-white shadow-md text-slate-800' : 'text-slate-500 hover:bg-white/30'}`} style={{ fontFamily: "'Cinzel Decorative', serif" }}>Insights</button>
+          <button onClick={() => setView('checkin')} className={`px-4 md:px-6 py-2 rounded-full transition-all text-[10px] font-black uppercase tracking-widest ${view === 'checkin' ? 'bg-white shadow-md text-slate-800' : 'text-slate-500 hover:bg-white/30'}`} style={{ fontFamily: "'Cinzel Decorative', serif" }}>Reflect</button>
+          <button onClick={() => setView('dashboard')} className={`px-4 md:px-6 py-2 rounded-full transition-all text-[10px] font-black uppercase tracking-widest ${view === 'dashboard' ? 'bg-white shadow-md text-slate-800' : 'text-slate-500 hover:bg-white/30'}`} style={{ fontFamily: "'Cinzel Decorative', serif" }}>Insights</button>
         </nav>
       </header>
 
       <main className="w-full max-w-5xl z-10">
         <AnimatePresence mode="wait">
           {view === 'checkin' ? (
-            <motion.div key="checkin" initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, y: -10 }} className="flex flex-col gap-8 pb-12">
+            <motion.div key="checkin" initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, y: -10 }} className="flex flex-col gap-6 md:gap-8 pb-12">
               
               {/* Mirror Area */}
-              <div ref={constraintsRef} className="z-10 relative backdrop-blur-2xl bg-white/30 p-10 rounded-[4rem] border border-white/40 shadow-xl flex flex-col items-center gap-12 min-h-[500px] overflow-hidden">
-                <div className="text-center z-20 pointer-events-none">
-                  <h2 className="text-2xl font-bold text-slate-800 mb-1" style={{ fontFamily: "'Cinzel Decorative', serif" }}>Fluid Release</h2>
-                  <p className="text-sm text-slate-500 italic">Drag to release tension. Tap palette to log.</p>
+              <div ref={constraintsRef} className="z-10 relative backdrop-blur-2xl bg-white/30 p-6 md:p-10 rounded-[2.5rem] md:rounded-[4rem] border border-white/40 shadow-xl flex flex-col items-center gap-8 md:gap-12 min-h-[400px] md:min-h-[500px] overflow-hidden">
+                <div className="text-center z-20">
+                  <h2 className="text-lg md:text-2xl font-bold text-slate-800 mb-1" style={{ fontFamily: "'Cinzel Decorative', serif" }}>Fluid Release</h2>
+                  <p className="text-xs md:text-sm text-slate-500 italic">Drag to release tension. Tap below to log.</p>
                 </div>
                 
-                <div className="relative flex-1 flex items-center justify-center w-full min-h-[250px] pointer-events-none">
+                <div className="relative flex-1 flex items-center justify-center w-full min-h-[200px] md:min-h-[250px]">
                   <motion.div 
                     drag dragConstraints={constraintsRef} dragElastic={0.6} style={{ x, y, rotateX, rotateY }} 
                     onDragEnd={() => { x.set(0); y.set(0); }}
-                    className={`pointer-events-auto z-30 w-56 h-56 shadow-2xl backdrop-blur-3xl transition-colors duration-1000 ${activeTheme.glass} ${activeTheme.glow} border border-white/60 flex items-center justify-center cursor-grab active:cursor-grabbing rounded-full`}
+                    className={`z-30 w-40 h-40 md:w-56 md:h-56 shadow-2xl backdrop-blur-3xl transition-colors duration-1000 ${activeTheme.glass} ${activeTheme.glow} border border-white/60 flex items-center justify-center cursor-grab active:cursor-grabbing rounded-full`}
                   >
                     <div className={activeTheme.accent}>{activeTheme.icon}</div>
                   </motion.div>
                 </div>
 
-                <div className="grid grid-cols-5 gap-4 w-full max-w-lg z-20">
+                <div className="grid grid-cols-5 gap-2 md:gap-4 w-full max-w-lg z-20">
                   {Object.entries(MOOD_THEMES).map(([key, theme]) => (
-                    <button key={key} onClick={() => setCurrentMood(key)} className={`group flex flex-col items-center gap-2 p-2 rounded-3xl transition-all ${currentMood === key ? `bg-white/60 ${theme.glow} scale-110 shadow-lg` : 'hover:bg-white/20'}`}>
-                      <div className={`w-10 h-10 rounded-full border-2 border-white ${theme.glass.replace('/20', '')}`} />
-                      <span className="text-[8px] font-black uppercase tracking-widest text-slate-500" style={{ fontFamily: "'Cinzel Decorative', serif" }}>{key}</span>
+                    <button key={key} onClick={() => setCurrentMood(key)} className={`group flex flex-col items-center gap-1 md:gap-2 p-1.5 md:p-2 rounded-2xl transition-all ${currentMood === key ? `bg-white/60 ${theme.glow} scale-110 shadow-lg` : 'hover:bg-white/20'}`}>
+                      <div className={`w-8 h-8 md:w-10 md:h-10 rounded-full border-2 border-white ${theme.glass.replace('/20', '')}`} />
+                      <span className="text-[7px] md:text-[8px] font-black uppercase tracking-widest text-slate-500" style={{ fontFamily: "'Cinzel Decorative', serif" }}>{key}</span>
                     </button>
                   ))}
                 </div>
               </div>
 
               {/* Temporal Pulse Calendar */}
-              <div className="relative z-40 backdrop-blur-xl bg-white/30 p-8 rounded-[3rem] border border-white/40 shadow-sm flex flex-col gap-6">
-                <div className="flex justify-between items-center">
+              <div className="relative z-40 backdrop-blur-xl bg-white/30 p-6 md:p-8 rounded-[2.5rem] md:rounded-[3rem] border border-white/40 shadow-sm flex flex-col gap-4 md:gap-6">
+                <div className="flex flex-col sm:flex-row justify-between items-center gap-4">
                   <div className="flex items-center gap-3">
-                    <CalendarIcon size={20} className="text-slate-700" />
-                    <h3 className="text-lg font-bold text-slate-800 uppercase tracking-widest" style={{ fontFamily: "'Cinzel Decorative', serif" }}>Temporal Pulse</h3>
+                    <CalendarIcon size={18} className="text-slate-700" />
+                    <h3 className="text-md md:text-lg font-bold text-slate-800 uppercase tracking-widest" style={{ fontFamily: "'Cinzel Decorative', serif" }}>Temporal Pulse</h3>
                   </div>
-                  <div className="flex items-center gap-2 bg-white/40 px-4 py-1.5 rounded-full border border-white/50 text-[10px] font-black">
-                    <ChevronLeft size={16} className="cursor-pointer" onClick={() => changeDate(-1)} />
-                    <span className="w-28 text-center">{selectedDate.toLocaleDateString('en-IN', { month: 'short', day: 'numeric' }).toUpperCase()}</span>
-                    <ChevronRight size={16} className="cursor-pointer" onClick={() => changeDate(1)} />
+                  <div className="flex items-center gap-2 bg-white/40 px-3 md:px-4 py-1.5 rounded-full border border-white/50 text-[9px] md:text-[10px] font-black">
+                    <ChevronLeft size={14} className="cursor-pointer" onClick={() => changeDate(-1)} />
+                    <span className="w-24 md:w-28 text-center">{formatDisplayDate(selectedDate)}</span>
+                    <ChevronRight size={14} className="cursor-pointer" onClick={() => changeDate(1)} />
                   </div>
                 </div>
-                <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
+                <div className="grid grid-cols-2 lg:grid-cols-4 gap-3 md:gap-4">
                   {TIME_SLOTS.map((slot) => {
                     const moodAtSlot = calendarData[getDateKey(selectedDate)]?.[slot.id];
                     const slotTheme = moodAtSlot ? MOOD_THEMES[moodAtSlot] : null;
@@ -271,32 +259,42 @@ export default function App() {
                       <button 
                         key={slot.id} 
                         onClick={() => handleSlotClick(slot.id)} 
-                        className={`pointer-events-auto relative p-4 rounded-[2rem] border transition-all flex flex-col items-center gap-2 min-h-[100px] 
+                        className={`pointer-events-auto relative p-3 md:p-4 rounded-[1.5rem] md:rounded-[2rem] border transition-all flex flex-col items-center gap-1 md:gap-2 min-h-[80px] md:min-h-[100px] 
                           ${moodAtSlot ? `${slotTheme.glass} border-white/50 ${slotTheme.glow}` : 'bg-white/10 border-white/20 hover:bg-white/40'}`}
                       >
-                        <span className="text-[8px] font-black uppercase tracking-widest text-slate-400">{slot.period}</span>
-                        <div className="h-8 flex items-center justify-center pointer-events-none">
-                          {moodAtSlot && <div className={slotTheme.accent}>{slotTheme.icon}</div>}
+                        <span className="text-[7px] md:text-[8px] font-black uppercase tracking-widest text-slate-400">{slot.period}</span>
+                        <div className="h-6 md:h-8 flex items-center justify-center pointer-events-none">
+                          {moodAtSlot && <div className={slotTheme.accent}>{React.cloneElement(slotTheme.icon, { size: 16 })}</div>}
                         </div>
-                        <span className="text-[10px] text-slate-500 font-medium italic pointer-events-none">{slot.label}</span>
+                        <span className="text-[8px] md:text-[10px] text-slate-500 font-medium italic pointer-events-none">{slot.label}</span>
                       </button>
                     );
                   })}
                 </div>
               </div>
+
+              {/* Voice Journal */}
+              <div className="backdrop-blur-xl bg-white/20 p-6 md:p-8 rounded-[2rem] md:rounded-[2.5rem] border border-white/30 flex flex-col sm:flex-row items-center justify-between shadow-sm gap-4">
+                <div className="flex gap-4 md:gap-6 items-center">
+                  <div className="p-4 md:p-5 rounded-full bg-white/40 text-slate-600"><Mic size={24} md:size={28} /></div>
+                  <h3 className="text-lg md:text-xl font-bold text-slate-800" style={{ fontFamily: "'Cinzel Decorative', serif" }}>Voice Journal</h3>
+                </div>
+                <button className="w-full sm:w-auto px-8 md:px-10 py-3 md:py-4 rounded-full font-black tracking-widest bg-slate-800 text-white hover:bg-slate-700 transition-colors" style={{ fontFamily: "'Cinzel Decorative', serif" }}>Record</button>
+              </div>
             </motion.div>
           ) : (
             <motion.div key="dashboard" initial={{ opacity: 0 }} animate={{ opacity: 1 }} className="flex flex-col gap-8">
-              <div className="backdrop-blur-3xl bg-slate-800/95 text-white p-12 rounded-[4rem] border border-white/10 shadow-2xl text-center">
+              <div className="backdrop-blur-3xl bg-slate-800/95 text-white p-8 md:p-12 rounded-[2.5rem] md:rounded-[4rem] border border-white/10 shadow-2xl text-center flex flex-col items-center">
                 {!currentSummary ? (
                   <div className="flex flex-col items-center gap-6">
-                    <p className="text-xl italic opacity-50">Log your day to generate synthesis.</p>
-                    <button onClick={generateSummary} disabled={isGenerating} className="px-10 py-4 bg-white text-slate-900 rounded-full font-black text-[10px] uppercase tracking-widest disabled:opacity-50">
-                      {isGenerating ? <Loader2 className="animate-spin" /> : 'Generate Synthesis'}
+                    <Star className="text-amber-400 fill-amber-400" size={32} />
+                    <p className="text-lg md:text-xl italic opacity-50">Log your day to generate synthesis.</p>
+                    <button onClick={generateSummary} disabled={isGenerating} className="px-8 md:px-10 py-3 md:py-4 bg-white text-slate-900 rounded-full font-black text-[10px] uppercase tracking-widest disabled:opacity-50 flex items-center gap-2">
+                      {isGenerating ? <Loader2 className="animate-spin" size={16} /> : 'Generate Synthesis'}
                     </button>
                   </div>
                 ) : (
-                  <p className="text-xl md:text-3xl italic leading-relaxed">
+                  <p className="text-lg md:text-3xl italic leading-relaxed max-w-2xl">
                     {typeof currentSummary.message === 'string' ? `"${currentSummary.message}"` : 'Synthesis complete. Reflect on your journey.'}
                   </p>
                 )}

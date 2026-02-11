@@ -374,17 +374,20 @@ export default function App() {
                 <h2 className="text-2xl md:text-4xl font-black uppercase tracking-[0.3em]" style={{ fontFamily: "'Cinzel Decorative', serif" }}>Mirror Horizon</h2>
                 <button onClick={() => setIsCalendarOpen(false)} className="p-3 bg-slate-100 rounded-full hover:bg-slate-200 transition-colors"><X size={28} /></button>
               </div>
+              
+              {/* Weekly Mental Health Alert */}
               <div className={`p-8 rounded-[3rem] border transition-all duration-1000 ${weeklyAlert?.alert ? 'bg-rose-500/10 border-rose-500/30' : 'bg-white border-slate-200 shadow-xl'}`}>
                 <div className="flex flex-col md:flex-row gap-6 items-center text-center md:text-left">
                    <div className={`p-5 rounded-[1.5rem] ${weeklyAlert?.alert ? 'bg-rose-500 shadow-lg' : 'bg-emerald-500 shadow-lg'} text-white`}>
                      {isGenerating ? <Loader2 className="animate-spin" size={32} /> : (weeklyAlert?.alert ? <Bell size={32} /> : <Sparkles size={32} />)}
                    </div>
                    <div className="flex-1">
-                     <h3 className="text-xl font-black uppercase mb-1 tracking-widest" style={{ fontFamily: "'Cinzel Decorative', serif" }}>{isGenerating ? 'Consulting Rhythms...' : (weeklyAlert?.status || 'Trend Found')}</h3>
-                     <p className="text-slate-600 italic text-sm md:text-base">{weeklyAlert?.message || "Synthesizing your historical emotional variants..."}</p>
+                     <h3 className="text-xl font-black uppercase mb-1 tracking-widest" style={{ fontFamily: "'Cinzel Decorative', serif" }}>{isGenerating ? 'Consulting Rhythms...' : (weeklyAlert?.status || 'Analyzing Trend')}</h3>
+                     <p className="text-slate-600 italic text-sm md:text-base leading-relaxed">{weeklyAlert?.message || "Synthesizing your historical emotional variants across the horizon..."}</p>
                    </div>
                 </div>
               </div>
+
               <div className="bg-white p-6 md:p-10 rounded-[3rem] border border-slate-200 shadow-2xl">
                 <div className="grid grid-cols-7 gap-2 md:gap-4 mb-8">
                   {['S','M','T','W','T','F','S'].map((d, i) => <div key={i} className="text-center text-[11px] font-black text-slate-400 uppercase" style={{ fontFamily: "'Cinzel Decorative', serif" }}>{d}</div>)}
@@ -393,7 +396,10 @@ export default function App() {
                   {calendarDays.map((item, idx) => (
                     <div key={idx} className="flex flex-col items-center">
                       {!item.empty ? (
-                        <div className={`w-full aspect-square rounded-[1rem] md:rounded-[1.5rem] border flex flex-col items-center justify-center relative transition-all duration-1000 ${item.mood ? `${MOOD_THEMES[item.mood].glass} border-white shadow-inner` : 'bg-slate-50 border-slate-100'} ${item.isToday ? 'ring-2 ring-indigo-500 shadow-lg' : ''}`}>
+                        <div className={`w-full aspect-square rounded-[1rem] md:rounded-[1.5rem] border flex flex-col items-center justify-center relative transition-all duration-1000
+                          ${item.mood ? `${MOOD_THEMES[item.mood].glass} border-white shadow-inner` : 'bg-slate-50 border-slate-100'}
+                          ${item.isToday ? 'ring-2 ring-indigo-500 shadow-lg' : ''}`}
+                        >
                           {item.mood && <div className={`${MOOD_THEMES[item.mood].accent} w-5 h-5 md:w-7 md:h-7 mb-1`}>{MOOD_THEMES[item.mood].icon}</div>}
                           <span className={`text-[9px] md:text-[11px] font-black ${item.mood ? 'text-slate-800' : 'text-slate-300'}`}>{item.day}</span>
                         </div>
@@ -452,7 +458,7 @@ export default function App() {
               ) : activeGame === 'pattern' ? (
                 <PatternPulseGame onFinish={(score) => { saveGameScore('patternScore', score); setActiveGame(null); }} />
               ) : (
-                <StressDissolve2 onFinish={(score) => { saveGameScore('dissolveScore', score); setActiveGame(null); }} />
+                <StressDissolveGame onFinish={(score) => { saveGameScore('dissolveScore', score); setActiveGame(null); }} />
               )}
             </div>
           </motion.div>
@@ -472,26 +478,39 @@ export default function App() {
   );
 }
 
-// --- GAME 1: PATTERN PULSE ---
+// --- GAME 1: PATTERN PULSE (Match-3 System) ---
 function PatternPulseGame({ onFinish }) {
   const COLORS = ['#34d399', '#fbbf24', '#fb7185', '#38bdf8', '#818cf8'];
   const [grid, setGrid] = useState([]);
   const [selected, setSelected] = useState(null);
   const [score, setScore] = useState(0);
   const [timeLeft, setTimeLeft] = useState(45);
-  const initGrid = () => setGrid(Array(25).fill(null).map(() => ({ color: COLORS[Math.floor(Math.random() * COLORS.length)], id: Math.random() })));
-  useEffect(() => { initGrid(); const timer = setInterval(() => setTimeLeft(t => t > 0 ? t - 1 : 0), 1000); return () => clearInterval(timer); }, []);
+
+  const initGrid = () => {
+    setGrid(Array(25).fill(null).map(() => ({ color: COLORS[Math.floor(Math.random() * COLORS.length)], id: Math.random() })));
+  };
+
+  useEffect(() => {
+    initGrid();
+    const timer = setInterval(() => setTimeLeft(t => t > 0 ? t - 1 : 0), 1000);
+    return () => clearInterval(timer);
+  }, []);
+
   useEffect(() => { if (timeLeft === 0) onFinish(score); }, [timeLeft]);
+
   const handleOrbClick = (idx) => {
     if (selected === null) { setSelected(idx); return; }
     const isAdjacent = [idx-1, idx+1, idx-5, idx+5].includes(selected);
     if (isAdjacent) {
-      const newGrid = [...grid]; [newGrid[idx], newGrid[selected]] = [newGrid[selected], newGrid[idx]];
+      const newGrid = [...grid];
+      [newGrid[idx], newGrid[selected]] = [newGrid[selected], newGrid[idx]];
       let matches = new Set();
       for (let i = 0; i < 5; i++) {
         for (let j = 0; j < 3; j++) {
-          const r = i * 5 + j; if (newGrid[r].color === newGrid[r+1].color && newGrid[r].color === newGrid[r+2].color) { matches.add(r); matches.add(r+1); matches.add(r+2); }
-          const c = j * 5 + i; if (newGrid[c].color === newGrid[c+5].color && newGrid[c].color === newGrid[c+10].color) { matches.add(c); matches.add(c+5); matches.add(c+10); }
+          const r = i * 5 + j;
+          if (newGrid[r].color === newGrid[r+1].color && newGrid[r].color === newGrid[r+2].color) { matches.add(r); matches.add(r+1); matches.add(r+2); }
+          const c = j * 5 + i;
+          if (newGrid[c].color === newGrid[c+5].color && newGrid[c].color === newGrid[c+10].color) { matches.add(c); matches.add(c+5); matches.add(c+10); }
         }
       }
       if (matches.size > 0) {
@@ -501,27 +520,113 @@ function PatternPulseGame({ onFinish }) {
     }
     setSelected(null);
   };
+
   return (
     <div className="flex flex-col items-center gap-6 pb-12">
-      <div className="flex justify-between w-full max-w-[300px] px-4"><div className="flex flex-col"><span className="text-[10px] opacity-40 font-black">Alignments</span><span className="text-4xl font-black">{score}</span></div><div className="text-2xl font-bold text-rose-400">{timeLeft}s</div></div>
-      <div className="grid grid-cols-5 gap-2 p-3 bg-white/5 rounded-[2.5rem] border border-white/10">{grid.map((orb, i) => (<motion.button key={orb.id} layout onClick={() => handleOrbClick(i)} className={`w-12 h-12 rounded-full border-2 transition-all ${selected === i ? 'border-white scale-110' : 'border-transparent opacity-80'}`} style={{ backgroundColor: orb.color }}><div className="w-1/2 h-1/2 bg-white/30 rounded-full blur-md" /></motion.button>))}</div>
+      <div className="flex justify-between w-full max-w-[300px] items-end px-4 text-white">
+        <div className="flex flex-col"><span className="text-[10px] uppercase opacity-40 font-black">Alignments</span><span className="text-4xl font-black">{score}</span></div>
+        <div className="text-2xl font-bold text-rose-400">{timeLeft}s</div>
+      </div>
+      <div className="grid grid-cols-5 gap-2 p-3 bg-white/5 rounded-[2.5rem] border border-white/10 shadow-2xl">
+        {grid.map((orb, i) => (
+          <motion.button key={orb.id} layout onClick={() => handleOrbClick(i)} className={`w-12 h-12 rounded-full border-2 transition-all flex items-center justify-center ${selected === i ? 'border-white scale-110' : 'border-transparent opacity-80'}`} style={{ backgroundColor: orb.color }}>
+            <div className="w-1/2 h-1/2 bg-white/30 rounded-full blur-md" />
+          </motion.button>
+        ))}
+      </div>
     </div>
   );
 }
 
-// --- GAME 2: STRESS DISSOLVE ---
+// --- INNOVATIVE GAME: STRESS DISSOLVE 2.0 (Fluid Gas Particles) ---
 function StressDissolveGame({ onFinish }) {
+  const [bubbles, setBubbles] = useState([]);
+  const [particles, setParticles] = useState([]);
   const [score, setScore] = useState(0);
-  const [clouds, setClouds] = useState([]);
   const [timeLeft, setTimeLeft] = useState(30);
+  const COLORS = ['#34d399', '#fbbf24', '#fb7185', '#38bdf8', '#818cf8'];
 
   useEffect(() => {
-    const interval = setInterval(() => {
-      if (timeLeft <= 0) {
-        clearInterval(interval);
-…        </motion.button>
+    const timer = setInterval(() => {
+      setTimeLeft(t => { if (t <= 1) { clearInterval(timer); onFinish(score); return 0; } return t - 1; });
+      if (bubbles.length < 8) {
+        setBubbles(b => [...b, {
+          id: Math.random(),
+          x: 10 + Math.random() * 80,
+          y: 110,
+          color: COLORS[Math.floor(Math.random() * COLORS.length)],
+          speed: 0.5 + Math.random() * 1.5,
+          size: 50 + Math.random() * 50
+        }]);
+      }
+    }, 700);
+
+    const frame = setInterval(() => {
+      setBubbles(b => b.map(bubble => ({ ...bubble, y: bubble.y - bubble.speed })).filter(bubble => bubble.y > -20));
+    }, 16);
+
+    return () => { clearInterval(timer); clearInterval(frame); };
+  }, [bubbles, score]);
+
+  const triggerBurst = (bubble) => {
+    setScore(s => s + 1);
+    setBubbles(b => b.filter(item => item.id !== bubble.id));
+    
+    // Create Gas Cloud Particles
+    const newGas = Array(12).fill(null).map(() => ({
+      id: Math.random(),
+      x: bubble.x,
+      y: bubble.y,
+      color: bubble.color,
+      angle: Math.random() * Math.PI * 2,
+      velocity: 1 + Math.random() * 3
+    }));
+    setParticles(prev => [...prev, ...newGas]);
+    setTimeout(() => setParticles(prev => prev.filter(p => !newGas.includes(p))), 1000);
+  };
+
+  return (
+    <div className="relative w-full h-[550px] bg-slate-950 rounded-[4rem] border border-white/5 overflow-hidden flex items-center justify-center shadow-2xl text-white">
+      <div className="absolute top-8 left-10 flex flex-col">
+        <span className="text-4xl font-black">{score}</span>
+        <p className="text-[10px] uppercase font-bold opacity-30">Dissolved</p>
+      </div>
+      <div className="absolute top-8 right-10 text-2xl font-bold text-rose-400">{timeLeft}s</div>
+      
+      <AnimatePresence>
+        {bubbles.map(b => (
+          <motion.button
+            key={b.id} initial={{ opacity: 0, scale: 0 }} animate={{ opacity: 1, scale: 1 }} exit={{ scale: 2, opacity: 0 }}
+            onClick={() => triggerBurst(b)}
+            className="absolute rounded-full backdrop-blur-lg border border-white/20 shadow-inner"
+            style={{ 
+              left: `${b.x}%`, top: `${b.y}%`, width: b.size, height: b.size,
+              background: `radial-gradient(circle at 30% 30%, white 0%, transparent 70%), ${b.color}33` 
+            }}
+          >
+            <div className="absolute inset-0 bg-white/10 opacity-20 animate-pulse rounded-full" />
+          </motion.button>
+        ))}
+      </AnimatePresence>
+
+      {/* Particle Gas Release */}
+      {particles.map(p => (
+        <motion.div
+          key={p.id}
+          initial={{ x: 0, y: 0, scale: 1, opacity: 0.8 }}
+          animate={{ 
+            x: Math.cos(p.angle) * 120, 
+            y: Math.sin(p.angle) * 120,
+            scale: 4,
+            opacity: 0
+          }}
+          transition={{ duration: 1, ease: "easeOut" }}
+          className="absolute w-4 h-4 rounded-full blur-xl"
+          style={{ backgroundColor: p.color, left: `${p.x}%`, top: `${p.y}%` }}
+        />
       ))}
-      <p className="text-[10px] uppercase tracking-[0.3em] opacity-40">Tap gray clouds to release stress</p>
+
+      <div className="text-[10px] uppercase tracking-[0.5em] opacity-20 absolute bottom-10 font-black">Tap Bubbles to Dissolve Stress</div>
     </div>
   );
 }

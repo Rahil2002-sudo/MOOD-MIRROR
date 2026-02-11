@@ -8,14 +8,15 @@ import {
 
 // Firebase Imports
 import { initializeApp } from 'firebase/app';
-import { getAuth, signInAnonymously, signInWithCustomToken, onAuthStateChanged } from 'firebase/auth';
-import { getFirestore, doc, setDoc, collection, onSnapshot } from 'firebase/firestore';
+import { getAuth, signInAnonymously, signInWithCustomToken, onAuthStateChanged, signOut } from 'firebase/auth';
+import { getFirestore, doc, setDoc, getDoc, collection, onSnapshot, query, limit, orderBy } from 'firebase/firestore';
 
 // --- ROBUST CONFIGURATION LOGIC ---
 const getEnvConfig = () => {
   if (typeof __firebase_config !== 'undefined' && __firebase_config) {
     return { firebase: JSON.parse(__firebase_config), gemini: "" };
   }
+  
   try {
     // @ts-ignore
     const metaEnv = import.meta.env; 
@@ -26,6 +27,7 @@ const getEnvConfig = () => {
       };
     }
   } catch (e) {}
+
   return { firebase: null, gemini: "" };
 };
 
@@ -33,6 +35,7 @@ const { firebase: config, gemini: geminiApiKey } = getEnvConfig();
 const appId = typeof __app_id !== 'undefined' ? __app_id : 'mood-mirror-prod';
 const apiKey = ""; 
 
+// Initialize services safely
 let auth = null, db = null;
 if (config && config.apiKey) {
   try {
@@ -69,7 +72,7 @@ export default function App() {
   const [calendarData, setCalendarData] = useState({});
   const [isGenerating, setIsGenerating] = useState(false);
 
-  // FEATURES STATE
+  // --- NEW STATES FOR FEATURES ---
   const [isCalendarOpen, setIsCalendarOpen] = useState(false);
   const [isGamesOpen, setIsGamesOpen] = useState(false);
   const [activeGame, setActiveGame] = useState(null);
@@ -79,6 +82,7 @@ export default function App() {
   const constraintsRef = useRef(null);
   const activeTheme = MOOD_THEMES[currentMood];
 
+  // Motion Values
   const x = useMotionValue(0);
   const y = useMotionValue(0);
   const springX = useSpring(x, { stiffness: 300, damping: 30 });
@@ -86,12 +90,16 @@ export default function App() {
   const rotateX = useTransform(springY, [-100, 100], [15, -15]);
   const rotateY = useTransform(springX, [-100, 100], [-15, 15]);
 
+  const currentHour = new Date().getHours();
+  const currentSlotId = TIME_SLOTS.find((_, i) => currentHour >= i * 6 && currentHour < (i + 1) * 6)?.id;
+
   const getDateKey = useCallback((date) => {
     const d = new Date(date);
     d.setMinutes(d.getMinutes() - d.getTimezoneOffset());
     return d.toISOString().split('T')[0];
   }, []);
 
+  // --- PROBABILITY LOGIC FOR CALENDAR ---
   const getDominantMoodOfDay = useCallback((dayData) => {
     if (!dayData) return null;
     const moods = [dayData.q1, dayData.q2, dayData.q3, dayData.q4].filter(Boolean);
@@ -101,6 +109,7 @@ export default function App() {
     return probWinner || Object.keys(freq).reduce((a, b) => freq[a] > freq[b] ? a : b);
   }, []);
 
+  // Sync & Auth Logic
   useEffect(() => {
     if (!auth) return;
     const initAuth = async () => {
@@ -110,6 +119,7 @@ export default function App() {
         } else {
           await signInAnonymously(auth);
         }
+        setAuthError(null);
       } catch (err) { 
         setAuthError(err.message);
         setTimeout(initAuth, 5000); 
@@ -146,6 +156,7 @@ export default function App() {
     }
   }, [selectedDate, currentMood, user, getDateKey]);
 
+  // --- WEEKLY HEALTH ALERT ENGINE ---
   const generateWeeklyInsight = async () => {
     if (!user || isGenerating) return;
     setIsGenerating(true);
@@ -157,10 +168,10 @@ export default function App() {
       if(mood) last7.push(mood);
     }
     if (last7.length < 3) {
-      setWeeklyAlert({ message: "Mirror requires 3 days of pulse data to generate your weekly horizon alert.", alert: false });
+      setWeeklyAlert({ message: "Mirror requires 3 days of depth to project your weekly horizon.", alert: false });
       setIsGenerating(false); return;
     }
-    const prompt = `Analyze trend: ${last7.join(', ')}. If 3+ stress/anxiety, send Vulnerability Alert. JSON: {"message": "Poetic summary", "status": "Stable/Vulnerable", "alert": true}`;
+    const prompt = `Analyze 7-day mood trend: ${last7.join(', ')}. If 3+ stress/anxiety, send Vulnerability Alert. JSON: {"message": "Poetic 2-sentence summary", "status": "Stable/Vulnerable", "alert": true}`;
     try {
       const finalKey = geminiApiKey || "";
       const response = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-preview-09-2025:generateContent?key=${finalKey}`, {
@@ -178,7 +189,7 @@ export default function App() {
     const statsRef = doc(db, 'artifacts', appId, 'users', user.uid, 'games', 'stats');
     try {
       await setDoc(statsRef, { ...gameStats, [gameKey]: Math.max(gameStats[gameKey] || 0, score) }, { merge: true });
-      setCurrentMood('joy'); 
+      setCurrentMood('joy'); // Dopamine reward
     } catch (e) { console.error(e); }
   };
 
@@ -209,20 +220,50 @@ export default function App() {
     );
   }
 
+  const changeDate = (offset) => {
+    const newDate = new Date(selectedDate);
+    newDate.setDate(selectedDate.getDate() + offset);
+    setSelectedDate(newDate);
+  };
+
+  const generateSummary = async () => {
+    if (!user || isGenerating) return;
+    const dateKey = getDateKey(selectedDate);
+    const dayData = calendarData[dateKey];
+    if (!dayData) return;
+    setIsGenerating(true);
+    const moods = Object.entries(dayData).filter(([k]) => k.startsWith('q')).map(([k, v]) => `${k}: ${v}`).join(', ');
+    const prompt = `Analyze: ${moods}. 2-sentence poetic summary. JSON: {"message": "..."}`;
+    try {
+      const finalKey = geminiApiKey || apiKey;
+      const response = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-preview-09-2025:generateContent?key=${finalKey}`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ contents: [{ parts: [{ text: prompt }] }], generationConfig: { responseMimeType: "application/json" } })
+      });
+      const result = await response.json();
+      const content = JSON.parse(result.candidates[0].content.parts[0].text);
+      const docRef = doc(db, 'artifacts', appId, 'users', user.uid, 'days', dateKey);
+      await setDoc(docRef, { ai_summary: content }, { merge: true });
+    } catch (e) { console.error(e); } finally { setIsGenerating(false); }
+  };
+
+  const currentSummary = calendarData[getDateKey(selectedDate)]?.ai_summary;
+
   return (
     <div className={`min-h-screen w-full transition-colors duration-1000 bg-gradient-to-br ${activeTheme.bg} p-4 md:p-8 flex flex-col items-center overflow-x-hidden font-sans`}>
       <style>{`@import url('https://fonts.googleapis.com/css2?family=Cinzel+Decorative:wght@400;700;900&display=swap');`}</style>
       
       {/* Top Right: Horizon Calendar Trigger */}
       <button 
-        onClick={() => { setIsCalendarOpen(true); generateWeeklyAlert(); }}
+        onClick={() => { setIsCalendarOpen(true); generateWeeklyInsight(); }}
         className="fixed top-6 right-6 z-[100] p-4 rounded-full backdrop-blur-xl bg-white/30 border border-white/40 shadow-lg text-slate-800 hover:scale-110 active:scale-95 transition-all"
       >
         <CalendarIcon size={24} />
       </button>
 
       {/* Sync Status Badge */}
-      <div className="fixed bottom-4 left-4 z-[100] group text-slate-800">
+      <div className="fixed bottom-4 left-4 z-[100] text-slate-800">
         <div className={`flex items-center gap-2 px-3 py-1.5 rounded-full backdrop-blur-md border text-[9px] font-black uppercase tracking-widest transition-all ${user ? 'bg-emerald-500/10 border-emerald-500/30 text-emerald-600' : 'bg-rose-500/10 border-rose-500/30 text-rose-500'}`}>
           <Cloud size={12} className={!user ? 'animate-pulse' : ''} />
           {user ? 'Cloud Synced' : 'Syncing...'}
@@ -240,21 +281,23 @@ export default function App() {
       <main className="w-full max-w-5xl z-10">
         <AnimatePresence mode="wait">
           {view === 'checkin' ? (
-            <motion.div key="checkin" initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, y: -10 }} className="flex flex-col gap-6 md:gap-8 pb-12">
-              <div ref={constraintsRef} className="z-10 relative backdrop-blur-2xl bg-white/30 p-6 md:p-10 rounded-[2.5rem] md:rounded-[4rem] border border-white/40 shadow-xl flex flex-col items-center gap-8 md:gap-12 min-h-[400px] md:min-h-[500px] overflow-hidden text-slate-800">
+            <motion.div key="checkin" initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, y: -10 }} className="flex flex-col gap-6 md:gap-8 pb-12 text-slate-800">
+              <div ref={constraintsRef} className="z-10 relative backdrop-blur-3xl bg-white/30 p-6 md:p-10 rounded-[2.5rem] md:rounded-[4rem] border border-white/40 shadow-xl flex flex-col items-center gap-8 md:gap-12 min-h-[400px] md:min-h-[500px] overflow-hidden">
                 <div className="text-center z-20">
-                  <h2 className="text-lg md:text-2xl font-bold text-slate-800 mb-1" style={{ fontFamily: "'Cinzel Decorative', serif" }}>Fluid Release</h2>
-                  <p className="text-xs md:text-sm text-slate-500 italic">Drag to release. Tap palette to log.</p>
+                  <h2 className="text-lg md:text-2xl font-bold uppercase tracking-widest opacity-80" style={{ fontFamily: "'Cinzel Decorative', serif" }}>Fluid Release</h2>
+                  <p className="text-xs md:text-sm italic opacity-60">Physically release tension. Tap palette to log vibe.</p>
                 </div>
                 <div className="relative flex-1 flex items-center justify-center w-full min-h-[200px] pointer-events-none">
                   <motion.div drag dragConstraints={constraintsRef} dragElastic={0.6} style={{ x, y, rotateX, rotateY }} onDragEnd={() => { x.set(0); y.set(0); }} className={`pointer-events-auto z-30 w-36 h-36 md:w-56 md:h-56 shadow-2xl backdrop-blur-3xl transition-colors duration-1000 ${activeTheme.glass} ${activeTheme.glow} border border-white/60 flex items-center justify-center cursor-grab active:cursor-grabbing rounded-full p-8`}>
-                    <div className={`${activeTheme.accent} w-12 h-12 md:w-20 md:h-20`}>{activeTheme.icon}</div>
+                    <div className={`${activeTheme.accent} w-full h-full`}>{React.cloneElement(activeTheme.icon, { size: '100%' })}</div>
                   </motion.div>
                 </div>
                 <div className="grid grid-cols-5 gap-3 md:gap-6 w-full max-w-lg z-20">
                   {Object.entries(MOOD_THEMES).map(([key, theme]) => (
-                    <button key={key} onClick={() => setCurrentMood(key)} className={`group flex flex-col items-center gap-2 p-1.5 rounded-3xl transition-all ${currentMood === key ? `bg-white/60 ${theme.glow} scale-110 shadow-lg` : 'hover:bg-white/20'}`}>
-                      <div className={`w-10 h-10 md:w-12 md:h-12 rounded-full border-2 border-white flex items-center justify-center p-2.5 transition-all`} style={{ backgroundColor: theme.solid }}><div className="text-white w-full h-full">{theme.icon}</div></div>
+                    <button key={key} onClick={() => setCurrentMood(key)} className={`group flex flex-col items-center gap-3 transition-all ${currentMood === key ? 'scale-110' : 'opacity-40 hover:opacity-100'}`}>
+                      <div className={`w-10 h-10 md:w-12 md:h-12 rounded-full border-2 border-white flex items-center justify-center p-2.5 shadow-lg`} style={{ backgroundColor: theme.solid }}>
+                        <div className="text-white w-full h-full">{React.cloneElement(theme.icon, { size: 18 })}</div>
+                      </div>
                       <span className="text-[7px] md:text-[8px] font-black uppercase tracking-widest text-slate-500" style={{ fontFamily: "'Cinzel Decorative', serif" }}>{key}</span>
                     </button>
                   ))}
@@ -263,14 +306,11 @@ export default function App() {
 
               <div className="relative z-[60] backdrop-blur-xl bg-white/40 p-6 md:p-8 rounded-[2.5rem] md:rounded-[3rem] border border-white/60 shadow-lg flex flex-col gap-6 text-slate-800">
                 <div className="flex flex-col sm:flex-row justify-between items-center gap-4">
-                  <div className="flex items-center gap-3">
-                    <CalendarIcon size={18} className="text-slate-700" />
-                    <h3 className="text-md md:text-lg font-bold text-slate-800 uppercase tracking-widest" style={{ fontFamily: "'Cinzel Decorative', serif" }}>Temporal Pulse</h3>
-                  </div>
-                  <div className="flex items-center gap-2 bg-white/60 px-4 py-1.5 rounded-full border border-white/80 text-[9px] md:text-[10px] font-black shadow-sm">
-                    <button onClick={() => setSelectedDate(new Date(selectedDate.setDate(selectedDate.getDate()-1)))} className="hover:text-slate-400 transition-colors"><ChevronLeft size={14} /></button>
+                  <h3 className="text-md md:text-lg font-bold uppercase tracking-widest" style={{ fontFamily: "'Cinzel Decorative', serif" }}>Temporal Pulse</h3>
+                  <div className="flex items-center gap-4 bg-white/60 px-4 py-2 rounded-full border border-white/80 text-[9px] md:text-[10px] font-black shadow-sm">
+                    <button onClick={() => changeDate(-1)} className="hover:text-slate-500"><ChevronLeft size={14} /></button>
                     <span className="w-24 md:w-28 text-center">{selectedDate.toLocaleDateString('en-IN', { month: 'short', day: 'numeric' }).toUpperCase()}</span>
-                    <button onClick={() => setSelectedDate(new Date(selectedDate.setDate(new Date().getDate()+1)))} className="hover:text-slate-400 transition-colors"><ChevronRight size={14} /></button>
+                    <button onClick={() => changeDate(1)} className="hover:text-slate-500"><ChevronRight size={14} /></button>
                   </div>
                 </div>
                 <div className="grid grid-cols-2 lg:grid-cols-4 gap-3 md:gap-4">
@@ -278,10 +318,10 @@ export default function App() {
                     const moodId = calendarData[getDateKey(selectedDate)]?.[slot.id];
                     const moodTheme = moodId ? MOOD_THEMES[moodId] : null;
                     return (
-                      <button key={slot.id} type="button" onClick={() => handleSlotClick(slot.id)} className={`pointer-events-auto relative p-4 rounded-[1.8rem] md:rounded-[2.2rem] border transition-all flex flex-col items-center gap-2 min-h-[90px] md:min-h-[110px] ${moodId ? `${moodTheme.glass} border-white/80 ${moodTheme.glow}` : 'bg-white/20 border-white/30 hover:bg-white/60'}`}>
+                      <button key={slot.id} onClick={() => handleSlotClick(slot.id)} className={`relative p-4 rounded-[1.8rem] md:rounded-[2.2rem] border transition-all flex flex-col items-center gap-2 min-h-[90px] md:min-h-[110px] ${moodId ? `${moodTheme.glass} border-white/80 ${moodTheme.glow}` : 'bg-white/20 border-white/30 hover:bg-white/60'}`}>
                         <span className="text-[7px] md:text-[8px] font-black uppercase tracking-widest text-slate-500">{slot.period}</span>
-                        <div className="h-8 md:h-10 flex items-center justify-center pointer-events-none">
-                          {moodId ? <div className={`${moodTheme.accent} w-6 h-6 md:w-8 md:h-8`}>{moodTheme.icon}</div> : <div className="w-6 h-6 md:w-8 md:h-8 border-2 border-dashed border-slate-300 rounded-full opacity-30" />}
+                        <div className="h-8 flex items-center justify-center pointer-events-none">
+                          {moodId ? <div className={`${moodTheme.accent} w-6 h-6 md:w-8 md:h-8`}>{moodTheme.icon}</div> : <div className="w-6 h-6 border-2 border-dashed border-slate-300 rounded-full opacity-30" />}
                         </div>
                         <span className="text-[8px] md:text-[9px] text-slate-400 font-bold tracking-tighter uppercase pointer-events-none">{slot.label}</span>
                       </button>
@@ -291,7 +331,7 @@ export default function App() {
               </div>
             </motion.div>
           ) : (
-            <div className="py-20 text-center opacity-40 uppercase tracking-[0.5em] text-sm text-slate-800">Insights engine active. Open the Horizon calendar.</div>
+            <div className="py-20 text-center opacity-40 uppercase tracking-[0.5em] text-sm text-slate-800">Insights engine active. Check Mirror Horizon.</div>
           )}
         </AnimatePresence>
       </main>
@@ -311,21 +351,19 @@ export default function App() {
             <div className="w-full max-w-4xl flex flex-col gap-8 text-slate-800">
               <div className="flex justify-between items-center">
                 <h2 className="text-2xl md:text-4xl font-black uppercase tracking-[0.3em]" style={{ fontFamily: "'Cinzel Decorative', serif" }}>Mirror Horizon</h2>
-                <button onClick={() => setIsCalendarOpen(false)} className="p-3 bg-slate-100 rounded-full hover:bg-slate-200"><X size={28} /></button>
+                <button onClick={() => setIsCalendarOpen(false)} className="p-3 bg-slate-100 rounded-full hover:bg-slate-200 transition-colors"><X size={28} /></button>
               </div>
-              
               <div className={`p-8 rounded-[3rem] border transition-all duration-1000 ${weeklyAlert?.alert ? 'bg-rose-500/10 border-rose-500/30' : 'bg-white border-slate-200 shadow-xl'}`}>
                 <div className="flex flex-col md:flex-row gap-6 items-center text-center md:text-left">
                    <div className={`p-5 rounded-[1.5rem] ${weeklyAlert?.alert ? 'bg-rose-500 shadow-lg' : 'bg-emerald-500 shadow-lg'} text-white`}>
                      {isGenerating ? <Loader2 className="animate-spin" size={32} /> : (weeklyAlert?.alert ? <Bell size={32} /> : <Sparkles size={32} />)}
                    </div>
                    <div className="flex-1">
-                     <h3 className="text-xl font-black uppercase mb-1 tracking-widest" style={{ fontFamily: "'Cinzel Decorative', serif" }}>{isGenerating ? 'Consulting Rhythms...' : (weeklyAlert?.status || 'Trend Identified')}</h3>
-                     <p className="text-slate-600 italic text-sm md:text-base">{weeklyAlert?.message || "Reading emotional frequencies across the horizon..."}</p>
+                     <h3 className="text-xl font-black uppercase mb-1 tracking-widest" style={{ fontFamily: "'Cinzel Decorative', serif" }}>{isGenerating ? 'Consulting Rhythms...' : (weeklyAlert?.status || 'Analyzing Trend')}</h3>
+                     <p className="text-slate-600 italic text-sm md:text-base leading-relaxed">{weeklyAlert?.message || "Synthesizing your historical emotional variants across the horizon..."}</p>
                    </div>
                 </div>
               </div>
-
               <div className="bg-white p-6 md:p-10 rounded-[3rem] border border-slate-200 shadow-2xl">
                 <div className="grid grid-cols-7 gap-2 md:gap-4 mb-8">
                   {['S','M','T','W','T','F','S'].map((d, i) => <div key={i} className="text-center text-[11px] font-black text-slate-400 uppercase" style={{ fontFamily: "'Cinzel Decorative', serif" }}>{d}</div>)}
@@ -346,6 +384,7 @@ export default function App() {
                   ))}
                 </div>
               </div>
+              <p className="text-center text-[10px] font-black text-slate-400 uppercase tracking-[0.4em]">Calculated daily at 01:00 AM • Neural Sync Active</p>
             </div>
           </motion.div>
         )}
@@ -357,57 +396,68 @@ export default function App() {
           <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} className="fixed inset-0 z-[300] bg-slate-900/98 backdrop-blur-3xl flex items-center justify-center p-4">
             <div className="w-full max-w-4xl flex flex-col gap-8 text-white max-h-full overflow-y-auto">
               <div className="flex justify-between items-center">
-                <div>
+                <div className="flex flex-col">
                   <h2 className="text-3xl md:text-4xl font-black uppercase tracking-widest" style={{ fontFamily: "'Cinzel Decorative', serif" }}>Zen Zone</h2>
-                  <p className="text-[10px] uppercase text-slate-400">Interactive Cognitive Flow</p>
+                  <p className="text-[10px] uppercase tracking-widest text-slate-400">Interactive Cognitive Flow</p>
                 </div>
-                <button onClick={() => { setIsGamesOpen(false); setActiveGame(null); }} className="p-3 bg-white/10 rounded-full hover:bg-white/20"><X size={28} /></button>
+                <button onClick={() => { setIsGamesOpen(false); setActiveGame(null); }} className="p-3 bg-white/10 rounded-full hover:bg-white/20 transition-colors"><X size={28} /></button>
               </div>
 
               {!activeGame ? (
-                <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-                  {/* Simplified Game 1 */}
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-6 pb-20">
+                  {/* Lightweight Game 1 */}
                   <div className="p-8 rounded-[3rem] bg-indigo-500/10 border border-white/10 flex flex-col gap-4 items-center text-center">
                     <Target size={40} className="text-indigo-400" />
-                    <h3 className="text-2xl font-black uppercase" style={{ fontFamily: "'Cinzel Decorative', serif" }}>Pattern Match</h3>
-                    <p className="text-xs opacity-60">Swap emotional orbs to align 3 of a kind. Simple, focusing, and meditative.</p>
-                    <div className="flex items-center gap-2 bg-white/5 px-4 py-2 rounded-2xl border border-white/10 text-[9px] uppercase">
-                      <HelpCircle size={12} />
-                      <span>HOW TO PLAY: Swap nearby orbs to align 3 or more of the same aura.</span>
+                    <h3 className="text-2xl font-black uppercase" style={{ fontFamily: "'Cinzel Decorative', serif" }}>Zen Tiles</h3>
+                    <p className="text-xs opacity-60">Simplify the noise. Tap matching adjacent orbs to clear them. High focus, low stress.</p>
+                    <div className="text-[10px] font-black uppercase tracking-widest text-indigo-400">Best Score: {gameStats.patternScore || 0}</div>
+                    <div className="flex items-center gap-2 bg-white/5 px-4 py-2 rounded-2xl border border-white/10 text-[9px] uppercase tracking-tighter">
+                      <HelpCircle size={12} className="text-slate-400" />
+                      <span>HOW TO PLAY: Tap any orb touching another of the same color.</span>
                     </div>
-                    <button onClick={() => setActiveGame('pattern')} className="w-full py-4 bg-white text-slate-900 rounded-full font-black uppercase text-xs">Play</button>
+                    <button onClick={() => setActiveGame('pattern')} className="w-full py-4 bg-white text-slate-900 rounded-full font-black uppercase tracking-widest text-xs">Enter Flow</button>
                   </div>
 
-                  {/* Simplified Game 2 */}
+                  {/* Lightweight Game 2 */}
                   <div className="p-8 rounded-[3rem] bg-rose-500/10 border border-white/10 flex flex-col gap-4 items-center text-center">
                     <Wand2 size={40} className="text-rose-400" />
                     <h3 className="text-2xl font-black uppercase" style={{ fontFamily: "'Cinzel Decorative', serif" }}>Stress Burst</h3>
-                    <p className="text-xs opacity-60">Tactile relief. Vaporize stressors with fluid physics bursts and colored emotional gas.</p>
-                    <div className="flex items-center gap-2 bg-white/5 px-4 py-2 rounded-2xl border border-white/10 text-[9px] uppercase">
-                      <HelpCircle size={12} />
-                      <span>HOW TO PLAY: Tap bubbles to trigger physics bursts and release gas.</span>
+                    <p className="text-xs opacity-60">Physical release. Bubbles emerge randomly on your screen. Burst them to release soothing gas.</p>
+                    <div className="text-[10px] font-black uppercase tracking-widest text-rose-400">Best Score: {gameStats.dissolveScore || 0}</div>
+                    <div className="flex items-center gap-2 bg-white/5 px-4 py-2 rounded-2xl border border-white/10 text-[9px] uppercase tracking-tighter">
+                      <HelpCircle size={12} className="text-slate-400" />
+                      <span>HOW TO PLAY: Tap emerging bubbles to trigger an aura burst.</span>
                     </div>
-                    <button onClick={() => setActiveGame('dissolve')} className="w-full py-4 bg-white text-slate-900 rounded-full font-black uppercase text-xs">Vaporize</button>
+                    <button onClick={() => setActiveGame('dissolve')} className="w-full py-4 bg-white text-slate-900 rounded-full font-black uppercase tracking-widest text-xs">Begin Release</button>
                   </div>
                 </div>
               ) : activeGame === 'pattern' ? (
-                <PatternPulseGame onFinish={(score) => { saveGameScore('patternScore', score); setActiveGame(null); }} />
+                <ZenTilesGame onFinish={(score) => { saveGameScore('patternScore', score); setActiveGame(null); }} />
               ) : (
-                <StressDissolveGame onFinish={(score) => { saveGameScore('dissolveScore', score); setActiveGame(null); }} />
+                <StressBurstGame onFinish={(score) => { saveGameScore('dissolveScore', score); setActiveGame(null); }} />
               )}
             </div>
           </motion.div>
         )}
       </AnimatePresence>
+
+      <style dangerouslySetInnerHTML={{ __html: `
+        @keyframes blob-slow {
+          0% { transform: rotate(0deg) scale(1); border-radius: 42% 58% 70% 30% / 45% 45% 55% 55%; }
+          33% { transform: rotate(120deg) scale(1.05); border-radius: 50% 50% 33% 67% / 55% 27% 73% 45%; }
+          66% { transform: rotate(240deg) scale(0.95); border-radius: 33% 67% 58% 42% / 63% 30% 70% 37%; }
+          100% { transform: rotate(360deg) scale(1); border-radius: 42% 58% 70% 30% / 45% 45% 55% 55%; }
+        }
+        .animate-blob-slow { animation: blob-slow 20s infinite linear; }
+      `}} />
     </div>
   );
 }
 
-// --- GAME 1: SIMPLIFIED PATTERN MATCH (Match-3 System) ---
-function PatternPulseGame({ onFinish }) {
+// --- GAME 1: ZEN TILES (Simplified Cluster Matching) ---
+function ZenTilesGame({ onFinish }) {
   const COLORS = ['#34d399', '#fbbf24', '#fb7185', '#38bdf8', '#818cf8'];
   const [grid, setGrid] = useState([]);
-  const [selected, setSelected] = useState(null);
   const [score, setScore] = useState(0);
   const [timeLeft, setTimeLeft] = useState(45);
 
@@ -420,40 +470,32 @@ function PatternPulseGame({ onFinish }) {
   useEffect(() => { if (timeLeft === 0) onFinish(score); }, [timeLeft]);
 
   const handleOrbClick = (idx) => {
-    if (selected === null) { setSelected(idx); return; }
-    const isAdjacent = [idx-1, idx+1, idx-5, idx+5].includes(selected);
-    if (isAdjacent) {
-      const newGrid = [...grid];
-      [newGrid[idx], newGrid[selected]] = [newGrid[selected], newGrid[idx]];
-      let matches = new Set();
-      for (let i = 0; i < 5; i++) {
-        for (let j = 0; j < 3; j++) {
-          const r = i * 5 + j;
-          if (newGrid[r].color === newGrid[r+1].color && newGrid[r].color === newGrid[r+2].color) { matches.add(r); matches.add(r+1); matches.add(r+2); }
-          const c = j * 5 + i;
-          if (newGrid[c].color === newGrid[c+5].color && newGrid[c].color === newGrid[c+10].color) { matches.add(c); matches.add(c+5); matches.add(c+10); }
-        }
-      }
-      if (matches.size > 0) {
-        setScore(s => s + matches.size * 10);
-        setGrid(newGrid.map((o, i) => matches.has(i) ? { color: COLORS[Math.floor(Math.random() * 5)], id: Math.random() } : o));
-      } else {
-        // Swap back
-        [newGrid[idx], newGrid[selected]] = [newGrid[selected], newGrid[idx]];
-      }
+    const clickedColor = grid[idx].color;
+    const toClear = new Set();
+    const findNeighbors = (i) => {
+      if (toClear.has(i) || grid[i].color !== clickedColor) return;
+      toClear.add(i);
+      if (i % 5 > 0) findNeighbors(i - 1);
+      if (i % 5 < 4) findNeighbors(i + 1);
+      if (i >= 5) findNeighbors(i - 5);
+      if (i < 20) findNeighbors(i + 5);
+    };
+    findNeighbors(idx);
+    if (toClear.size > 1) {
+      setScore(s => s + toClear.size * 10);
+      setGrid(grid.map((o, i) => toClear.has(i) ? { color: COLORS[Math.floor(Math.random() * 5)], id: Math.random() } : o));
     }
-    setSelected(null);
   };
 
   return (
-    <div className="flex flex-col items-center gap-6">
-      <div className="flex justify-between w-full max-w-[280px] px-2">
-        <div className="flex flex-col"><span className="text-[10px] opacity-40 font-black">Points</span><span className="text-3xl font-black">{score}</span></div>
-        <div className="text-xl font-bold text-rose-400">{timeLeft}s</div>
+    <div className="flex flex-col items-center gap-6 pb-12">
+      <div className="flex justify-between w-full max-w-[300px] items-end px-4 text-white font-black">
+        <div className="flex flex-col"><span className="text-[10px] uppercase opacity-40 font-black">Alignments</span><span className="text-4xl font-black">{score}</span></div>
+        <div className="text-2xl font-bold text-rose-400">{timeLeft}s</div>
       </div>
-      <div className="grid grid-cols-5 gap-2 p-3 bg-white/5 rounded-[2rem] border border-white/10">
+      <div className="grid grid-cols-5 gap-2 p-3 bg-white/5 rounded-[2.5rem] border border-white/10 shadow-2xl">
         {grid.map((orb, i) => (
-          <motion.button key={orb.id} layout onClick={() => handleOrbClick(i)} className={`w-12 h-12 rounded-full border-2 transition-all flex items-center justify-center ${selected === i ? 'border-white scale-110' : 'border-transparent opacity-80'}`} style={{ backgroundColor: orb.color }}>
+          <motion.button key={orb.id} layout onClick={() => handleOrbClick(i)} className="w-12 h-12 md:w-14 md:h-14 rounded-full border border-white/10 transition-all active:scale-90" style={{ backgroundColor: orb.color }}>
             <div className="w-1/2 h-1/2 bg-white/30 rounded-full blur-md" />
           </motion.button>
         ))}
@@ -462,8 +504,8 @@ function PatternPulseGame({ onFinish }) {
   );
 }
 
-// --- GAME 2: STRESS DISSOLVE 2.0 (Fluid Particles) ---
-function StressDissolveGame({ onFinish }) {
+// --- GAME 2: STRESS BURST (Random Emerging Bubble logic) ---
+function StressBurstGame({ onFinish }) {
   const [bubbles, setBubbles] = useState([]);
   const [particles, setParticles] = useState([]);
   const [score, setScore] = useState(0);
@@ -471,14 +513,19 @@ function StressDissolveGame({ onFinish }) {
   const COLORS = ['#34d399', '#fbbf24', '#fb7185', '#38bdf8', '#818cf8'];
 
   useEffect(() => {
-    const timer = setInterval(() => {
-      setTimeLeft(t => { if (t <= 1) return 0; return t - 1; });
+    const spawner = setInterval(() => {
       if (bubbles.length < 8) {
-        setBubbles(b => [...b, { id: Math.random(), x: 10 + Math.random() * 80, y: 110, color: COLORS[Math.floor(Math.random() * 5)], speed: 0.5 + Math.random() * 1.5, size: 50 + Math.random() * 40 }]);
+        setBubbles(b => [...b, {
+          id: Math.random(),
+          x: 10 + Math.random() * 80,
+          y: 15 + Math.random() * 70,
+          color: COLORS[Math.floor(Math.random() * 5)],
+          size: 60 + Math.random() * 40
+        }]);
       }
-    }, 800);
-    const frame = setInterval(() => setBubbles(b => b.map(bubble => ({ ...bubble, y: bubble.y - bubble.speed })).filter(bubble => bubble.y > -20)), 16);
-    return () => { clearInterval(timer); clearInterval(frame); };
+    }, 600);
+    const timer = setInterval(() => setTimeLeft(t => t > 0 ? t - 1 : 0), 1000);
+    return () => { clearInterval(spawner); clearInterval(timer); };
   }, [bubbles.length]);
 
   useEffect(() => { if (timeLeft === 0) onFinish(score); }, [timeLeft]);
@@ -486,25 +533,45 @@ function StressDissolveGame({ onFinish }) {
   const triggerBurst = (bubble) => {
     setScore(s => s + 1);
     setBubbles(b => b.filter(item => item.id !== bubble.id));
-    const newGas = Array(10).fill(null).map(() => ({ id: Math.random(), x: bubble.x, y: bubble.y, color: bubble.color, angle: Math.random() * Math.PI * 2, velocity: 1 + Math.random() * 2 }));
+    const newGas = Array(10).fill(null).map(() => ({
+      id: Math.random(), x: bubble.x, y: bubble.y, color: bubble.color,
+      angle: Math.random() * Math.PI * 2, velocity: 1 + Math.random() * 2
+    }));
     setParticles(prev => [...prev, ...newGas]);
     setTimeout(() => setParticles(prev => prev.filter(p => !newGas.includes(p))), 800);
   };
 
   return (
-    <div className="relative w-full h-[500px] bg-slate-950 rounded-[4rem] border border-white/5 overflow-hidden flex items-center justify-center">
-      <div className="absolute top-8 left-10 flex flex-col"><span className="text-4xl font-black">{score}</span><p className="text-[10px] uppercase opacity-30">Dissolved</p></div>
+    <div className="relative w-full h-[550px] bg-slate-950 rounded-[4rem] border border-white/5 overflow-hidden flex items-center justify-center shadow-2xl text-white">
+      <div className="absolute top-8 left-10"><span className="text-4xl font-black">{score}</span><p className="text-[10px] uppercase font-bold opacity-30 tracking-widest">Dissolved</p></div>
       <div className="absolute top-8 right-10 text-2xl font-bold text-rose-400">{timeLeft}s</div>
+      
       <AnimatePresence>
         {bubbles.map(b => (
-          <motion.button key={b.id} initial={{ opacity: 0, scale: 0 }} animate={{ opacity: 1, scale: 1 }} exit={{ scale: 2, opacity: 0 }} onClick={() => triggerBurst(b)} className="absolute rounded-full backdrop-blur-lg border border-white/20 shadow-inner" style={{ left: `${b.x}%`, top: `${b.y}%`, width: b.size, height: b.size, background: `radial-gradient(circle at 30% 30%, white 0%, transparent 70%), ${b.color}33` }}>
+          <motion.button
+            key={b.id} initial={{ opacity: 0, scale: 0 }} animate={{ opacity: 1, scale: 1 }} exit={{ scale: 1.5, opacity: 0 }}
+            onClick={() => triggerBurst(b)}
+            className="absolute rounded-full backdrop-blur-lg border border-white/20 shadow-inner"
+            style={{ 
+              left: `${b.x}%`, top: `${b.y}%`, width: b.size, height: b.size,
+              background: `radial-gradient(circle at 30% 30%, white 0%, transparent 70%), ${b.color}33` 
+            }}
+          >
             <div className="absolute inset-0 bg-white/10 opacity-20 animate-pulse rounded-full" />
           </motion.button>
         ))}
       </AnimatePresence>
+
       {particles.map(p => (
-        <motion.div key={p.id} initial={{ x: 0, y: 0, scale: 1, opacity: 0.8 }} animate={{ x: Math.cos(p.angle) * 80, y: Math.sin(p.angle) * 80, scale: 3, opacity: 0 }} transition={{ duration: 0.8, ease: "easeOut" }} className="absolute w-4 h-4 rounded-full blur-xl" style={{ backgroundColor: p.color, left: `${p.x}%`, top: `${p.y}%` }} />
+        <motion.div
+          key={p.id} initial={{ x: 0, y: 0, scale: 1, opacity: 0.8 }}
+          animate={{ x: Math.cos(p.angle) * 80, y: Math.sin(p.angle) * 80, scale: 4, opacity: 0 }}
+          transition={{ duration: 0.8, ease: "easeOut" }}
+          className="absolute w-5 h-5 rounded-full blur-xl"
+          style={{ backgroundColor: p.color, left: `${p.x}%`, top: `${p.y}%` }}
+        />
       ))}
+      <div className="text-[10px] uppercase tracking-[0.6em] opacity-20 absolute bottom-10 font-black">Tap Bubbles to Dissolve Stress</div>
     </div>
   );
 }

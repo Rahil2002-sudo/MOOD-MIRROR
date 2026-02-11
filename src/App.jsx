@@ -72,11 +72,11 @@ export default function App() {
   const [calendarData, setCalendarData] = useState({});
   const [isGenerating, setIsGenerating] = useState(false);
 
-  // --- NEW STATES FOR FEATURES ---
+  // FEATURES STATE
   const [isCalendarOpen, setIsCalendarOpen] = useState(false);
   const [isGamesOpen, setIsGamesOpen] = useState(false);
   const [activeGame, setActiveGame] = useState(null);
-  const [gameStats, setGameStats] = useState({ patternScore: 0, dissolveScore: 0 });
+  const [gameStats, setGameStats] = useState({ dissolveScore: 0 });
   const [weeklyAlert, setWeeklyAlert] = useState(null);
 
   const constraintsRef = useRef(null);
@@ -99,7 +99,6 @@ export default function App() {
     return d.toISOString().split('T')[0];
   }, []);
 
-  // --- PROBABILITY LOGIC FOR CALENDAR ---
   const getDominantMoodOfDay = useCallback((dayData) => {
     if (!dayData) return null;
     const moods = [dayData.q1, dayData.q2, dayData.q3, dayData.q4].filter(Boolean);
@@ -119,7 +118,6 @@ export default function App() {
         } else {
           await signInAnonymously(auth);
         }
-        setAuthError(null);
       } catch (err) { 
         setAuthError(err.message);
         setTimeout(initAuth, 5000); 
@@ -171,7 +169,7 @@ export default function App() {
       setWeeklyAlert({ message: "Mirror requires 3 days of depth to project your weekly horizon.", alert: false });
       setIsGenerating(false); return;
     }
-    const prompt = `Analyze 7-day mood trend: ${last7.join(', ')}. If 3+ stress/anxiety, send Vulnerability Alert. JSON: {"message": "Poetic 2-sentence summary", "status": "Stable/Vulnerable", "alert": true}`;
+    const prompt = `Analyze trend: ${last7.join(', ')}. If 3+ stress/anxiety, send Vulnerability Alert. JSON: {"message": "Poetic summary", "status": "Stable/Vulnerable", "alert": true}`;
     try {
       const finalKey = geminiApiKey || "";
       const response = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-preview-09-2025:generateContent?key=${finalKey}`, {
@@ -189,7 +187,7 @@ export default function App() {
     const statsRef = doc(db, 'artifacts', appId, 'users', user.uid, 'games', 'stats');
     try {
       await setDoc(statsRef, { ...gameStats, [gameKey]: Math.max(gameStats[gameKey] || 0, score) }, { merge: true });
-      setCurrentMood('joy'); // Dopamine reward
+      setCurrentMood('joy'); 
     } catch (e) { console.error(e); }
   };
 
@@ -214,7 +212,7 @@ export default function App() {
         <div className="max-w-md backdrop-blur-xl bg-white/5 p-10 rounded-[3rem] border border-white/10 shadow-2xl flex flex-col items-center gap-6">
           <AlertCircle className="text-rose-500 w-16 h-16" />
           <h1 className="text-2xl font-black uppercase tracking-widest" style={{ fontFamily: "'Cinzel Decorative', serif" }}>Mirror Missing</h1>
-          <p className="text-slate-400 text-sm">Add VITE_FIREBASE_CONFIG to Vercel Settings.</p>
+          <p className="text-slate-400 text-sm italic">Add VITE_FIREBASE_CONFIG to Vercel Settings.</p>
         </div>
       </div>
     );
@@ -226,6 +224,7 @@ export default function App() {
     setSelectedDate(newDate);
   };
 
+  // --- AI SYNTHESIS GENERATOR ---
   const generateSummary = async () => {
     if (!user || isGenerating) return;
     const dateKey = getDateKey(selectedDate);
@@ -263,7 +262,7 @@ export default function App() {
       </button>
 
       {/* Sync Status Badge */}
-      <div className="fixed bottom-4 left-4 z-[100] text-slate-800">
+      <div className="fixed bottom-4 left-4 z-[100] group text-slate-800">
         <div className={`flex items-center gap-2 px-3 py-1.5 rounded-full backdrop-blur-md border text-[9px] font-black uppercase tracking-widest transition-all ${user ? 'bg-emerald-500/10 border-emerald-500/30 text-emerald-600' : 'bg-rose-500/10 border-rose-500/30 text-rose-500'}`}>
           <Cloud size={12} className={!user ? 'animate-pulse' : ''} />
           {user ? 'Cloud Synced' : 'Syncing...'}
@@ -271,10 +270,13 @@ export default function App() {
       </div>
 
       <header className="w-full max-w-5xl flex flex-col md:flex-row justify-between items-center mb-8 md:mb-12 z-20 gap-4">
-        <h1 className="text-2xl md:text-4xl font-black uppercase tracking-widest text-slate-800" style={{ fontFamily: "'Cinzel Decorative', serif" }}>Mood Mirror</h1>
+        <div className="flex flex-col items-center md:items-start">
+          <h1 className="text-2xl md:text-4xl font-black uppercase tracking-widest text-slate-800" style={{ fontFamily: "'Cinzel Decorative', serif" }}>Mood Mirror</h1>
+          <div className="h-1 w-16 md:w-24 bg-slate-800 rounded-full mt-1 opacity-20 hidden md:block" />
+        </div>
         <nav className="flex gap-2 backdrop-blur-xl bg-white/20 p-1.5 rounded-full border border-white/30 shadow-sm">
-          <button onClick={() => setView('checkin')} className={`px-5 md:px-7 py-2.5 rounded-full transition-all text-[10px] font-black uppercase tracking-widest ${view === 'checkin' ? 'bg-white shadow-md text-slate-900' : 'text-slate-500'}`}>Reflect</button>
-          <button onClick={() => setView('dashboard')} className={`px-5 md:px-7 py-2.5 rounded-full transition-all text-[10px] font-black uppercase tracking-widest ${view === 'dashboard' ? 'bg-white shadow-md text-slate-900' : 'text-slate-500'}`}>Insights</button>
+          <button onClick={() => setView('checkin')} className={`px-5 md:px-7 py-2.5 rounded-full transition-all text-[10px] font-black uppercase tracking-widest ${view === 'checkin' ? 'bg-white shadow-md text-slate-900' : 'text-slate-500 hover:bg-white/30'}`}>Reflect</button>
+          <button onClick={() => setView('dashboard')} className={`px-5 md:px-7 py-2.5 rounded-full transition-all text-[10px] font-black uppercase tracking-widest ${view === 'dashboard' ? 'bg-white shadow-md text-slate-900' : 'text-slate-500 hover:bg-white/30'}`}>Insights</button>
         </nav>
       </header>
 
@@ -282,7 +284,7 @@ export default function App() {
         <AnimatePresence mode="wait">
           {view === 'checkin' ? (
             <motion.div key="checkin" initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, y: -10 }} className="flex flex-col gap-6 md:gap-8 pb-12 text-slate-800">
-              <div ref={constraintsRef} className="z-10 relative backdrop-blur-3xl bg-white/30 p-6 md:p-10 rounded-[2.5rem] md:rounded-[4rem] border border-white/40 shadow-xl flex flex-col items-center gap-8 md:gap-12 min-h-[400px] md:min-h-[500px] overflow-hidden">
+              <div ref={constraintsRef} className="z-10 relative backdrop-blur-3xl bg-white/30 p-6 md:p-10 rounded-[2.5rem] md:rounded-[4rem] border border-white/40 shadow-xl flex flex-col items-center gap-8 md:gap-12 min-h-[400px] md:min-h-[500px] overflow-hidden text-slate-800">
                 <div className="text-center z-20">
                   <h2 className="text-lg md:text-2xl font-bold uppercase tracking-widest opacity-80" style={{ fontFamily: "'Cinzel Decorative', serif" }}>Fluid Release</h2>
                   <p className="text-xs md:text-sm italic opacity-60">Physically release tension. Tap palette to log vibe.</p>
@@ -298,7 +300,7 @@ export default function App() {
                       <div className={`w-10 h-10 md:w-12 md:h-12 rounded-full border-2 border-white flex items-center justify-center p-2.5 shadow-lg`} style={{ backgroundColor: theme.solid }}>
                         <div className="text-white w-full h-full">{React.cloneElement(theme.icon, { size: 18 })}</div>
                       </div>
-                      <span className="text-[7px] md:text-[8px] font-black uppercase tracking-widest text-slate-500" style={{ fontFamily: "'Cinzel Decorative', serif" }}>{key}</span>
+                      <span className="text-[7px] md:text-[8px] font-black uppercase tracking-widest" style={{ fontFamily: "'Cinzel Decorative', serif" }}>{key}</span>
                     </button>
                   ))}
                 </div>
@@ -331,7 +333,39 @@ export default function App() {
               </div>
             </motion.div>
           ) : (
-            <div className="py-20 text-center opacity-40 uppercase tracking-[0.5em] text-sm text-slate-800">Insights engine active. Check Mirror Horizon.</div>
+            /* --- RESTORED INSIGHTS SECTION --- */
+            <motion.div key="dashboard" initial={{ opacity: 0 }} animate={{ opacity: 1 }} className="flex flex-col gap-8 pb-12">
+              <div className="backdrop-blur-3xl bg-slate-800/95 text-white p-8 md:p-16 rounded-[2.5rem] md:rounded-[4rem] border border-white/10 shadow-2xl text-center flex flex-col items-center">
+                {!currentSummary ? (
+                  <div className="flex flex-col items-center gap-8">
+                    <Star className="text-amber-400 fill-amber-400" size={40} />
+                    <p className="text-lg md:text-2xl italic opacity-60 font-light leading-relaxed max-w-md">Log your temporal pulse to generate a poetic synthesis of your day.</p>
+                    <button 
+                      onClick={generateSummary} 
+                      disabled={isGenerating} 
+                      className="px-10 py-5 bg-white text-slate-900 rounded-full font-black text-[11px] tracking-[0.3em] uppercase shadow-2xl disabled:opacity-50 hover:scale-105 transition-transform"
+                      style={{ fontFamily: "'Cinzel Decorative', serif" }}
+                    >
+                      {isGenerating ? <Loader2 className="animate-spin" size={20} /> : 'Generate Synthesis'}
+                    </button>
+                  </div>
+                ) : (
+                  <div className="flex flex-col items-center gap-10">
+                    <Star className="text-amber-400 fill-amber-400" size={24} />
+                    <p className="text-xl md:text-4xl italic leading-tight max-w-3xl font-medium text-slate-100">
+                      "{currentSummary.message}"
+                    </p>
+                    <button 
+                      onClick={() => generateSummary()}
+                      className="text-[10px] font-black tracking-widest uppercase text-white/30 hover:text-white transition-colors"
+                      style={{ fontFamily: "'Cinzel Decorative', serif" }}
+                    >
+                      Regenerate Reflection
+                    </button>
+                  </div>
+                )}
+              </div>
+            </motion.div>
           )}
         </AnimatePresence>
       </main>
@@ -360,7 +394,7 @@ export default function App() {
                    </div>
                    <div className="flex-1">
                      <h3 className="text-xl font-black uppercase mb-1 tracking-widest" style={{ fontFamily: "'Cinzel Decorative', serif" }}>{isGenerating ? 'Consulting Rhythms...' : (weeklyAlert?.status || 'Analyzing Trend')}</h3>
-                     <p className="text-slate-600 italic text-sm md:text-base leading-relaxed">{weeklyAlert?.message || "Synthesizing your historical emotional variants across the horizon..."}</p>
+                     <p className="text-slate-600 italic text-sm md:text-base leading-relaxed">{weeklyAlert?.message || "Reading your emotional frequencies across time..."}</p>
                    </div>
                 </div>
               </div>
@@ -398,41 +432,25 @@ export default function App() {
               <div className="flex justify-between items-center">
                 <div className="flex flex-col">
                   <h2 className="text-3xl md:text-4xl font-black uppercase tracking-widest" style={{ fontFamily: "'Cinzel Decorative', serif" }}>Zen Zone</h2>
-                  <p className="text-[10px] uppercase tracking-widest text-slate-400">Interactive Cognitive Flow</p>
+                  <p className="text-[10px] uppercase tracking-widest text-slate-400">Sensory Release & Physics-Based Play</p>
                 </div>
                 <button onClick={() => { setIsGamesOpen(false); setActiveGame(null); }} className="p-3 bg-white/10 rounded-full hover:bg-white/20 transition-colors"><X size={28} /></button>
               </div>
 
               {!activeGame ? (
-                <div className="grid grid-cols-1 md:grid-cols-2 gap-6 pb-20">
-                  {/* Lightweight Game 1 */}
-                  <div className="p-8 rounded-[3rem] bg-indigo-500/10 border border-white/10 flex flex-col gap-4 items-center text-center">
-                    <Target size={40} className="text-indigo-400" />
-                    <h3 className="text-2xl font-black uppercase" style={{ fontFamily: "'Cinzel Decorative', serif" }}>Zen Tiles</h3>
-                    <p className="text-xs opacity-60">Simplify the noise. Tap matching adjacent orbs to clear them. High focus, low stress.</p>
-                    <div className="text-[10px] font-black uppercase tracking-widest text-indigo-400">Best Score: {gameStats.patternScore || 0}</div>
-                    <div className="flex items-center gap-2 bg-white/5 px-4 py-2 rounded-2xl border border-white/10 text-[9px] uppercase tracking-tighter">
+                <div className="grid grid-cols-1 gap-6 max-w-lg mx-auto w-full pb-20">
+                  <div className="p-8 rounded-[3rem] bg-rose-500/10 border border-white/10 flex flex-col gap-6 items-center text-center">
+                    <div className="p-5 rounded-full bg-rose-500/20 text-rose-400 shadow-xl"><Wand2 size={50} /></div>
+                    <h3 className="text-2xl font-black uppercase tracking-widest" style={{ fontFamily: "'Cinzel Decorative', serif" }}>Stress Burst 2.0</h3>
+                    <p className="text-xs opacity-60 leading-relaxed">Pure tactile relief. Vaporize rising stressors as they emerge. Each burst releases a therapeutic aura cloud.</p>
+                    <div className="text-[10px] font-black uppercase tracking-[0.3em] text-rose-400">High Score: {gameStats.dissolveScore || 0}</div>
+                    <div className="flex items-center gap-2 bg-white/5 px-4 py-2 rounded-2xl border border-white/10 text-[9px] uppercase">
                       <HelpCircle size={12} className="text-slate-400" />
-                      <span>HOW TO PLAY: Tap any orb touching another of the same color.</span>
+                      <span>HOW TO PLAY: Tap bubbles to trigger an aura burst. Survive for 60 seconds.</span>
                     </div>
-                    <button onClick={() => setActiveGame('pattern')} className="w-full py-4 bg-white text-slate-900 rounded-full font-black uppercase tracking-widest text-xs">Enter Flow</button>
-                  </div>
-
-                  {/* Lightweight Game 2 */}
-                  <div className="p-8 rounded-[3rem] bg-rose-500/10 border border-white/10 flex flex-col gap-4 items-center text-center">
-                    <Wand2 size={40} className="text-rose-400" />
-                    <h3 className="text-2xl font-black uppercase" style={{ fontFamily: "'Cinzel Decorative', serif" }}>Stress Burst</h3>
-                    <p className="text-xs opacity-60">Physical release. Bubbles emerge randomly on your screen. Burst them to release soothing gas.</p>
-                    <div className="text-[10px] font-black uppercase tracking-widest text-rose-400">Best Score: {gameStats.dissolveScore || 0}</div>
-                    <div className="flex items-center gap-2 bg-white/5 px-4 py-2 rounded-2xl border border-white/10 text-[9px] uppercase tracking-tighter">
-                      <HelpCircle size={12} className="text-slate-400" />
-                      <span>HOW TO PLAY: Tap emerging bubbles to trigger an aura burst.</span>
-                    </div>
-                    <button onClick={() => setActiveGame('dissolve')} className="w-full py-4 bg-white text-slate-900 rounded-full font-black uppercase tracking-widest text-xs">Begin Release</button>
+                    <button onClick={() => setActiveGame('dissolve')} className="w-full py-5 bg-white text-slate-900 rounded-full font-black uppercase tracking-widest text-xs hover:scale-105 active:scale-95 transition-all">Begin Release</button>
                   </div>
                 </div>
-              ) : activeGame === 'pattern' ? (
-                <ZenTilesGame onFinish={(score) => { saveGameScore('patternScore', score); setActiveGame(null); }} />
               ) : (
                 <StressBurstGame onFinish={(score) => { saveGameScore('dissolveScore', score); setActiveGame(null); }} />
               )}
@@ -454,124 +472,97 @@ export default function App() {
   );
 }
 
-// --- GAME 1: ZEN TILES (Simplified Cluster Matching) ---
-function ZenTilesGame({ onFinish }) {
-  const COLORS = ['#34d399', '#fbbf24', '#fb7185', '#38bdf8', '#818cf8'];
-  const [grid, setGrid] = useState([]);
-  const [score, setScore] = useState(0);
-  const [timeLeft, setTimeLeft] = useState(45);
-
-  useEffect(() => {
-    setGrid(Array(25).fill(null).map(() => ({ color: COLORS[Math.floor(Math.random() * 5)], id: Math.random() })));
-    const timer = setInterval(() => setTimeLeft(t => t > 0 ? t - 1 : 0), 1000);
-    return () => clearInterval(timer);
-  }, []);
-
-  useEffect(() => { if (timeLeft === 0) onFinish(score); }, [timeLeft]);
-
-  const handleOrbClick = (idx) => {
-    const clickedColor = grid[idx].color;
-    const toClear = new Set();
-    const findNeighbors = (i) => {
-      if (toClear.has(i) || grid[i].color !== clickedColor) return;
-      toClear.add(i);
-      if (i % 5 > 0) findNeighbors(i - 1);
-      if (i % 5 < 4) findNeighbors(i + 1);
-      if (i >= 5) findNeighbors(i - 5);
-      if (i < 20) findNeighbors(i + 5);
-    };
-    findNeighbors(idx);
-    if (toClear.size > 1) {
-      setScore(s => s + toClear.size * 10);
-      setGrid(grid.map((o, i) => toClear.has(i) ? { color: COLORS[Math.floor(Math.random() * 5)], id: Math.random() } : o));
-    }
-  };
-
-  return (
-    <div className="flex flex-col items-center gap-6 pb-12">
-      <div className="flex justify-between w-full max-w-[300px] items-end px-4 text-white font-black">
-        <div className="flex flex-col"><span className="text-[10px] uppercase opacity-40 font-black">Alignments</span><span className="text-4xl font-black">{score}</span></div>
-        <div className="text-2xl font-bold text-rose-400">{timeLeft}s</div>
-      </div>
-      <div className="grid grid-cols-5 gap-2 p-3 bg-white/5 rounded-[2.5rem] border border-white/10 shadow-2xl">
-        {grid.map((orb, i) => (
-          <motion.button key={orb.id} layout onClick={() => handleOrbClick(i)} className="w-12 h-12 md:w-14 md:h-14 rounded-full border border-white/10 transition-all active:scale-90" style={{ backgroundColor: orb.color }}>
-            <div className="w-1/2 h-1/2 bg-white/30 rounded-full blur-md" />
-          </motion.button>
-        ))}
-      </div>
-    </div>
-  );
-}
-
-// --- GAME 2: STRESS BURST (Random Emerging Bubble logic) ---
+// --- OPTIMIZED STRESS BURST GAME (Lag-Free & Random Emerge) ---
 function StressBurstGame({ onFinish }) {
   const [bubbles, setBubbles] = useState([]);
   const [particles, setParticles] = useState([]);
   const [score, setScore] = useState(0);
-  const [timeLeft, setTimeLeft] = useState(30);
+  const [timeLeft, setTimeLeft] = useState(60);
   const COLORS = ['#34d399', '#fbbf24', '#fb7185', '#38bdf8', '#818cf8'];
 
   useEffect(() => {
     const spawner = setInterval(() => {
-      if (bubbles.length < 8) {
+      if (bubbles.length < 5) {
         setBubbles(b => [...b, {
           id: Math.random(),
           x: 10 + Math.random() * 80,
-          y: 15 + Math.random() * 70,
+          y: 15 + Math.random() * 65,
           color: COLORS[Math.floor(Math.random() * 5)],
-          size: 60 + Math.random() * 40
+          size: 70 + Math.random() * 40
         }]);
       }
-    }, 600);
-    const timer = setInterval(() => setTimeLeft(t => t > 0 ? t - 1 : 0), 1000);
-    return () => { clearInterval(spawner); clearInterval(timer); };
+    }, 850);
+    return () => clearInterval(spawner);
   }, [bubbles.length]);
 
-  useEffect(() => { if (timeLeft === 0) onFinish(score); }, [timeLeft]);
+  useEffect(() => {
+    const timerInterval = setInterval(() => {
+      setTimeLeft(prev => {
+        if (prev <= 1) {
+          clearInterval(timerInterval);
+          return 0;
+        }
+        return prev - 1;
+      });
+    }, 1000);
+    return () => clearInterval(timerInterval);
+  }, []);
+
+  useEffect(() => {
+    if (timeLeft === 0) {
+      onFinish(score);
+    }
+  }, [timeLeft, score, onFinish]);
 
   const triggerBurst = (bubble) => {
     setScore(s => s + 1);
     setBubbles(b => b.filter(item => item.id !== bubble.id));
-    const newGas = Array(10).fill(null).map(() => ({
+    const newGas = Array(6).fill(null).map(() => ({
       id: Math.random(), x: bubble.x, y: bubble.y, color: bubble.color,
-      angle: Math.random() * Math.PI * 2, velocity: 1 + Math.random() * 2
+      angle: Math.random() * Math.PI * 2
     }));
     setParticles(prev => [...prev, ...newGas]);
-    setTimeout(() => setParticles(prev => prev.filter(p => !newGas.includes(p))), 800);
+    setTimeout(() => {
+      setParticles(prev => prev.filter(p => !newGas.includes(p)));
+    }, 750);
   };
 
   return (
     <div className="relative w-full h-[550px] bg-slate-950 rounded-[4rem] border border-white/5 overflow-hidden flex items-center justify-center shadow-2xl text-white">
-      <div className="absolute top-8 left-10"><span className="text-4xl font-black">{score}</span><p className="text-[10px] uppercase font-bold opacity-30 tracking-widest">Dissolved</p></div>
-      <div className="absolute top-8 right-10 text-2xl font-bold text-rose-400">{timeLeft}s</div>
-      
+      <div className="absolute top-8 left-10 flex flex-col items-center">
+        <span className="text-4xl font-black">{score}</span>
+        <p className="text-[10px] uppercase font-bold opacity-30 tracking-widest">Dissolved</p>
+      </div>
+      <div className="absolute top-8 right-10 text-3xl font-black text-rose-400 tabular-nums">
+        {timeLeft}s
+      </div>
       <AnimatePresence>
         {bubbles.map(b => (
           <motion.button
             key={b.id} initial={{ opacity: 0, scale: 0 }} animate={{ opacity: 1, scale: 1 }} exit={{ scale: 1.5, opacity: 0 }}
             onClick={() => triggerBurst(b)}
-            className="absolute rounded-full backdrop-blur-lg border border-white/20 shadow-inner"
+            className="absolute rounded-full backdrop-blur-xl border border-white/20 shadow-inner"
             style={{ 
               left: `${b.x}%`, top: `${b.y}%`, width: b.size, height: b.size,
-              background: `radial-gradient(circle at 30% 30%, white 0%, transparent 70%), ${b.color}33` 
+              background: `radial-gradient(circle at 30% 30%, white 0%, transparent 80%), ${b.color}44` 
             }}
           >
             <div className="absolute inset-0 bg-white/10 opacity-20 animate-pulse rounded-full" />
           </motion.button>
         ))}
       </AnimatePresence>
-
       {particles.map(p => (
         <motion.div
           key={p.id} initial={{ x: 0, y: 0, scale: 1, opacity: 0.8 }}
           animate={{ x: Math.cos(p.angle) * 80, y: Math.sin(p.angle) * 80, scale: 4, opacity: 0 }}
           transition={{ duration: 0.8, ease: "easeOut" }}
-          className="absolute w-5 h-5 rounded-full blur-xl"
+          className="absolute w-5 h-5 rounded-full blur-xl pointer-events-none"
           style={{ backgroundColor: p.color, left: `${p.x}%`, top: `${p.y}%` }}
         />
       ))}
-      <div className="text-[10px] uppercase tracking-[0.6em] opacity-20 absolute bottom-10 font-black">Tap Bubbles to Dissolve Stress</div>
+      <div className="text-[10px] uppercase tracking-[0.5em] opacity-20 absolute bottom-10 font-black pointer-events-none text-center px-6">
+        Touch Bubbles to Vaporize Stress
+      </div>
     </div>
   );
 }

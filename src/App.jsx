@@ -118,6 +118,7 @@ export default function App() {
         } else {
           await signInAnonymously(auth);
         }
+        setAuthError(null);
       } catch (err) { 
         setAuthError(err.message);
         setTimeout(initAuth, 5000); 
@@ -146,6 +147,12 @@ export default function App() {
 
   const handleSlotClick = useCallback(async (slotId) => {
     const dateKey = getDateKey(selectedDate);
+    // Optimistic UI Update to ensure responsiveness even with slow sync
+    setCalendarData(prev => ({
+      ...prev,
+      [dateKey]: { ...(prev[dateKey] || {}), [slotId]: currentMood }
+    }));
+
     if (user && db) {
       const docRef = doc(db, 'artifacts', appId, 'users', user.uid, 'days', dateKey);
       try {
@@ -234,7 +241,7 @@ export default function App() {
     const moods = Object.entries(dayData).filter(([k]) => k.startsWith('q')).map(([k, v]) => `${k}: ${v}`).join(', ');
     const prompt = `Analyze: ${moods}. 2-sentence poetic summary. JSON: {"message": "..."}`;
     try {
-      const finalKey = geminiApiKey || apiKey;
+      const finalKey = geminiApiKey || "";
       const response = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-preview-09-2025:generateContent?key=${finalKey}`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -265,7 +272,7 @@ export default function App() {
       <div className="fixed bottom-4 left-4 z-[100] group text-slate-800">
         <div className={`flex items-center gap-2 px-3 py-1.5 rounded-full backdrop-blur-md border text-[9px] font-black uppercase tracking-widest transition-all ${user ? 'bg-emerald-500/10 border-emerald-500/30 text-emerald-600' : 'bg-rose-500/10 border-rose-500/30 text-rose-500'}`}>
           <Cloud size={12} className={!user ? 'animate-pulse' : ''} />
-          {user ? 'Cloud Synced' : 'Syncing...'}
+          {user ? 'Cloud Synced' : authError ? 'Config Error' : 'Syncing...'}
         </div>
       </div>
 
@@ -310,9 +317,9 @@ export default function App() {
                 <div className="flex flex-col sm:flex-row justify-between items-center gap-4">
                   <h3 className="text-md md:text-lg font-bold uppercase tracking-widest" style={{ fontFamily: "'Cinzel Decorative', serif" }}>Temporal Pulse</h3>
                   <div className="flex items-center gap-4 bg-white/60 px-4 py-2 rounded-full border border-white/80 text-[9px] md:text-[10px] font-black shadow-sm">
-                    <button onClick={() => changeDate(-1)} className="hover:text-slate-500"><ChevronLeft size={14} /></button>
+                    <button onClick={() => changeDate(-1)} className="hover:text-slate-500 transition-colors"><ChevronLeft size={14} /></button>
                     <span className="w-24 md:w-28 text-center">{selectedDate.toLocaleDateString('en-IN', { month: 'short', day: 'numeric' }).toUpperCase()}</span>
-                    <button onClick={() => changeDate(1)} className="hover:text-slate-500"><ChevronRight size={14} /></button>
+                    <button onClick={() => changeDate(1)} className="hover:text-slate-500 transition-colors"><ChevronRight size={14} /></button>
                   </div>
                 </div>
                 <div className="grid grid-cols-2 lg:grid-cols-4 gap-3 md:gap-4">
@@ -333,7 +340,7 @@ export default function App() {
               </div>
             </motion.div>
           ) : (
-            /* --- RESTORED INSIGHTS SECTION --- */
+            /* --- RESTORED POETIC INSIGHTS DASHBOARD --- */
             <motion.div key="dashboard" initial={{ opacity: 0 }} animate={{ opacity: 1 }} className="flex flex-col gap-8 pb-12">
               <div className="backdrop-blur-3xl bg-slate-800/95 text-white p-8 md:p-16 rounded-[2.5rem] md:rounded-[4rem] border border-white/10 shadow-2xl text-center flex flex-col items-center">
                 {!currentSummary ? (
